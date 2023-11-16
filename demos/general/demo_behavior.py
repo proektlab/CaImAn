@@ -39,9 +39,7 @@ def main():
 
     if cfg.input is None:
         # If no input is specified, use sample data, downloading if necessary
-        fnames = ['demo_behavior.h5']
-        if fnames[0] in ['demo_behavior.h5']:
-            fname = [download_demo(fname[0])]
+        fnames = [download_demo('demo_behavior.h5')]
     else:
         fnames = cfg.input
     # If you prefer to hardcode filenames, you could do something like this:
