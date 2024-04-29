@@ -215,6 +215,7 @@ class Estimates(object):
             caiman.utils.visualization.plot_contours(self.A[:, idx], img,
                                                      coordinates=coor_g,
                                                      display_numbers=display_numbers,
+                                                     inds_for_numbers=idx,
                                                      cmap=cmap)
             plt.title('Accepted Components')
             bad = list(set(range(self.A.shape[1])) - set(idx))
@@ -222,6 +223,7 @@ class Estimates(object):
             caiman.utils.visualization.plot_contours(self.A[:, bad], img,
                                                      coordinates=coor_b,
                                                      display_numbers=display_numbers,
+                                                     inds_for_numbers=bad,
                                                      cmap=cmap)
             plt.title('Rejected Components')
         return self
@@ -309,7 +311,7 @@ class Estimates(object):
                                thr=thr, params=params, cmap=cmap)
         return self
 
-    def view_components(self, Yr=None, img=None, idx=None):
+    def view_components(self, Yr=None, img=None, idx=None, show_spatial_component=True, display_inds=None):
         """view spatial and temporal components interactively
 
         Args:
@@ -342,14 +344,16 @@ class Estimates(object):
         if idx is None:
             caiman.utils.visualization.view_patches_bar(Yr, self.A, self.C,
                     self.b, self.f, self.dims[0], self.dims[1], YrA=self.R, img=img,
-                    r_values=self.r_values, SNR=self.SNR_comp, cnn_preds=self.cnn_preds)
+                    r_values=self.r_values, SNR=self.SNR_comp, cnn_preds=self.cnn_preds,
+                    show_spatial_component=show_spatial_component, display_inds=display_inds)
         else:
             caiman.utils.visualization.view_patches_bar(
                 Yr, self.A.tocsc()[:,idx], self.C[idx], self.b, self.f,
                 self.dims[0], self.dims[1], YrA=self.R[idx], img=img,
                 r_values=None if self.r_values is None else self.r_values[idx],
                 SNR=None if self.SNR_comp is None else self.SNR_comp[idx],
-                cnn_preds=None if np.sum(self.cnn_preds) in (0, None) else self.cnn_preds[idx])
+                cnn_preds=None if np.sum(self.cnn_preds) in (0, None) else self.cnn_preds[idx],
+                show_spatial_component=show_spatial_component, display_inds=display_inds)
         return self
 
     def nb_view_components(self, Yr=None, img=None, idx=None,

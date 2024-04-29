@@ -893,7 +893,8 @@ def display_animation(anim, fps=20):
     return HTML(anim_to_html(anim, fps=fps))
 
 def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
-                     r_values=None, SNR=None, cnn_preds=None):
+                     r_values=None, SNR=None, cnn_preds=None,
+                     show_spatial_component=True, display_inds=None):
     """view spatial and temporal components interactively
 
     Args:
@@ -930,6 +931,12 @@ def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
 
         cnn_preds: np.ndarray
             prediction values from the CNN classifier
+
+        show_spatial_component: bool
+            set to False to hide top-left plot (helps for wide images)
+        
+        display_inds: iterable of length K
+            component indices to display (defaults to range(K))
     """
 
     plt.ion()
@@ -946,6 +953,8 @@ def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
     else:
         Y_r = YrA + C
 
+    cm = caiman.base.rois.com(A, d1, d2)
+
     if img is None:
         img = np.reshape(np.array(A.mean(axis=1)), (d1, d2), order='F')
 
@@ -953,29 +962,38 @@ def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
 
     axcomp = plt.axes([0.05, 0.05, 0.9, 0.03])
 
-    ax1 = plt.axes([0.05, 0.55, 0.4, 0.4])
-    ax3 = plt.axes([0.55, 0.55, 0.4, 0.4])
+    if show_spatial_component:
+        ax1 = plt.axes([0.05, 0.55, 0.4, 0.4])
+        ax3 = plt.axes([0.55, 0.55, 0.4, 0.4])
+    else:
+        ax1 = None
+        ax3 = plt.axes([0.05, 0.55, 0.9, 0.4])
+
     ax2 = plt.axes([0.05, 0.1, 0.9, 0.4])
 
     s_comp = matplotlib.widgets.Slider(axcomp, 'Component', 0, nr + nb - 1, valinit=0)
     vmax = np.percentile(img, 95)
+
+    if display_inds is None:
+        display_inds = range(nr)
 
     def update(val):
         i = int(np.round(s_comp.val))
         print(('Component:' + str(i)))
 
         if i < nr:
-
-            ax1.cla()
             imgtmp = np.reshape(A[:, i].toarray(), (d1, d2), order='F')
-            ax1.imshow(imgtmp, interpolation='None', cmap=matplotlib.cm.gray, vmax=np.max(imgtmp)*0.5)
-            ax1.set_title('Spatial component ' + str(i + 1))
-            ax1.axis('off')
+            if ax1 is not None:
+                imgtmp2 = imgtmp.copy()
+                ax1.cla()
+                ax1.imshow(imgtmp2, interpolation='None', cmap=matplotlib.cm.gray, vmax=np.max(imgtmp)*0.5)
+                ax1.set_title('Spatial component ' + str(display_inds[i]))
+                ax1.axis('off')
 
             ax2.cla()
             ax2.plot(np.arange(T), Y_r[i], 'c', linewidth=3)
             ax2.plot(np.arange(T), C[i], 'r', linewidth=2)
-            ax2.set_title('Temporal component ' + str(i + 1))
+            ax2.set_title('Temporal component ' + str(display_inds[i]))
             ax2.legend(labels=['Filtered raw data', 'Inferred trace'], loc=1)
             if r_values is not None:
                 metrics = 'Evaluation Metrics\nSpatial corr:% 7.3f\nSNR:% 18.3f\nCNN:' % (
@@ -986,21 +1004,25 @@ def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
 
             ax3.cla()
             ax3.imshow(img, interpolation='None', cmap=matplotlib.cm.gray, vmax=vmax)
-            imgtmp2 = imgtmp.copy()
-            imgtmp2[imgtmp2 == 0] = np.nan
-            ax3.imshow(imgtmp2, interpolation='None',
+            imgtmp[imgtmp == 0] = np.nan
+            ax3.imshow(imgtmp, interpolation='None',
                        alpha=0.5, cmap=matplotlib.cm.hot)
+            ax3.text(cm[i, 1], cm[i, 0], str(display_inds[i]), color='k')
             ax3.axis('off')
         else:
-            ax1.cla()
-            bkgrnd = np.reshape(b[:, i - nr], (d1, d2), order='F')
-            ax1.imshow(bkgrnd, interpolation='None')
-            ax1.set_title('Spatial background ' + str(i + 1 - nr))
-            ax1.axis('off')
+            if ax1 is not None:
+                ax1.cla()
+                bkgrnd = np.reshape(b[:, i - nr], (d1, d2), order='F')
+                ax1.imshow(bkgrnd, interpolation='None')
+                ax1.set_title('Spatial background ' + str(i + 1 - nr))
+                ax1.axis('off')
 
             ax2.cla()
             ax2.plot(np.arange(T), np.squeeze(np.array(f[i - nr, :])))
             ax2.set_title('Temporal background ' + str(i + 1 - nr))
+
+            ax3.cla()
+            ax3.imshow(img, interpolation='None', cmap=matplotlib.cm.gray, vmax=vmax)
 
     def arrow_key_image_control(event):
 
@@ -1024,7 +1046,7 @@ def view_patches_bar(Yr, A, C, b, f, d1, d2, YrA=None, img=None,
     plt.show()
 
 def plot_contours(A, Cn, thr=None, thr_method='max', maxthr=0.2, nrgthr=0.9, display_numbers=True, max_number=None,
-                  cmap=None, swap_dim=False, colors='w', vmin=None, vmax=None, coordinates=None,
+                  cmap=None, swap_dim=False, colors='w', vmin=None, vmax=None, coordinates=None, inds_for_numbers=None,
                   contour_args={}, number_args={}, **kwargs):
     """Plots contour of spatial components against a background image and returns their coordinates
 
@@ -1055,6 +1077,9 @@ def plot_contours(A, Cn, thr=None, thr_method='max', maxthr=0.2, nrgthr=0.9, dis
     
          max_number:    int
                    Display the number for only the first max_number components (default None, display all numbers)
+
+         inds_for_numbers: [optional] vector
+                   What numbers to display (defaults to range(min(nr, max_number)) if None, else overrides max_number)
     
          cmap:     string
                    User specifies the colormap (default None, default colormap)
@@ -1103,11 +1128,14 @@ def plot_contours(A, Cn, thr=None, thr_method='max', maxthr=0.2, nrgthr=0.9, dis
         cm = caiman.base.rois.com(A, d1, d2)
         if max_number is None:
             max_number = A.shape[1]
-        for i in range(np.minimum(nr, max_number)):
+        if inds_for_numbers is None:
+            inds_for_numbers = range(np.minimum(nr, max_number))
+
+        for num, i in zip(inds_for_numbers, range(nr)):
             if swap_dim:
-                ax.text(cm[i, 0], cm[i, 1], str(i + 1), color=colors, **number_args)
+                ax.text(cm[i, 0], cm[i, 1], str(num), color=colors, **number_args)
             else:
-                ax.text(cm[i, 1], cm[i, 0], str(i + 1), color=colors, **number_args)
+                ax.text(cm[i, 1], cm[i, 0], str(num), color=colors, **number_args)
     return coordinates
 
 def plot_shapes(Ab, dims, num_comps=15, size=(15, 15), comps_per_row=None,
