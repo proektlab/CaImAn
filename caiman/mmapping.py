@@ -177,7 +177,7 @@ def save_memmap_each(fnames: list[str],
     return fnames_new
 
 def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int = 20, dview=None,
-                     add_to_mov: float = 0.0) -> str:
+                     add_to_mov: float = 0.0, save_npz=True) -> str:
     """
     Makes a large file memmap from a number of smaller files
 
@@ -238,7 +238,8 @@ def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int
     else:
         list(map(save_portion, pars))
 
-    np.savez(caiman.paths.fn_relocated(base_name + '.npz'), mmap_fnames=mmap_fnames, fname_tot=fname_tot)
+    if save_npz:
+        np.savez(caiman.paths.fn_relocated(base_name + '.npz'), mmap_fnames=mmap_fnames, fname_tot=fname_tot)
 
     logger.info('Deleting big mov')
     del big_mov
