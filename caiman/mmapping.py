@@ -177,7 +177,7 @@ def save_memmap_each(fnames: list[str],
     return fnames_new
 
 def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int = 20, dview=None,
-                     add_to_mov: float = 0.0, save_npz=True) -> str:
+                     add_to_mov: float = 0.0, save_npz=True, border_to_0=0) -> str:
     """
     Makes a large file memmap from a number of smaller files
 
@@ -197,11 +197,14 @@ def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int
 
     tot_frames = 0
     order = 'C'
+    min_mov = np.inf
     for f in mmap_fnames:
         cleaner_f = caiman.paths.fn_relocated(f)
         Yr, dims, T = load_memmap(cleaner_f)
         logger.debug(f"save_memmap_join (loading data): {cleaner_f} {T}")
         tot_frames += T
+        if border_to_0 > 0:
+            min_mov = min(min_mov, caiman.movie(Yr).calc_min().item())
         del Yr
 
     d = np.prod(dims)
@@ -220,14 +223,14 @@ def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int
     step = int(d // n_chunks)
     pars = []
     for ref in range(0, d - step + 1, step):
-        pars.append([fname_tot, d, tot_frames, mmap_fnames, ref, ref + step, add_to_mov])
+        pars.append([fname_tot, d, tot_frames, mmap_fnames, ref, ref + step, add_to_mov, border_to_0, min_mov])
 
-    if len(pars[-1]) != 7:
+    if len(pars[-1]) != 9:
         raise Exception(
             'You cannot change the number of element in list without changing the statement below (pars[]..)')
     else:
         # last batch should include the leftover pixels
-        pars[-1][-2] = d
+        pars[-1][-4] = d
 
     if dview is not None:
         if 'multiprocessing' in str(type(dview)):
@@ -295,7 +298,7 @@ def save_portion(pars) -> int:
     logger = logging.getLogger("caiman")
 
     use_mmap_save = False
-    big_mov_fn, d, tot_frames, fnames, idx_start, idx_end, add_to_mov = pars
+    big_mov_fn, d, tot_frames, fnames, idx_start, idx_end, add_to_mov, border_to_0, min_mov = pars
     big_mov_fn = caiman.paths.fn_relocated(big_mov_fn)
 
     Ttot = 0
@@ -304,11 +307,23 @@ def save_portion(pars) -> int:
     for f in fnames:
         full_f = caiman.paths.fn_relocated(f)
         logger.debug(f"Saving portion to {full_f}")
-        Yr, _, T = load_memmap(full_f)
+        Yr, dims, T = load_memmap(full_f)
         Yr_tot[:, Ttot:Ttot +
                T] = np.ascontiguousarray(Yr[idx_start:idx_end], dtype=np.float32) + np.float32(add_to_mov)
         Ttot = Ttot + T
         del Yr
+
+    # determine which pixels to set to min_mov, if any
+    if border_to_0 > 0:
+        inds = np.arange(idx_start, idx_end, dtype=int)
+        ny, nx = dims[:2]
+        if len(dims) > 2:
+            # planes are irrelevant
+            inds %= dims[2]
+        inds_y = inds % ny
+        inds_x = inds // ny
+        Yr_tot[(inds_x < border_to_0) | (inds_x >= nx - border_to_0), :] = min_mov
+        Yr_tot[(inds_y < border_to_0) | (inds_y >= ny - border_to_0), :] = min_mov
 
     logger.debug(f"Index start and end are {idx_start} and {idx_end}")
 
