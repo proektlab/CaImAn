@@ -37,7 +37,7 @@ dependencies:
 - scipy >= 1.10.1
 - setuptools
 - tabulate
-- tifffile
+- tifffile >=2022.2.2
 - tk
 - torchinfo 
 - torchvision
