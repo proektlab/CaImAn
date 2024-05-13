@@ -91,6 +91,10 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
     if subindices is None:
         subindices = slice(None)
     
+    basename, ext = os.path.splitext(filename)
+    if ext == '.sbx':
+        filename = basename
+
     if auto_process_bidi:
         # determine whether recording is bidirectional
         info = loadmat_sbx(filename + '.mat')['info']
@@ -204,19 +208,21 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         raise Exception('Length of subindices does not match length of file list')        
 
     # Check if any files are bidirectional
+    basenames, exts = zip(*[os.path.splitext(file) for file in filenames])
+    filenames = [bn if ext == '.sbx' else fn for fn, bn, ext in zip(filenames, basenames, exts)]
     infos = [loadmat_sbx(file + '.mat')['info'] for file in filenames]
     is_bidi = ['scanmode' in info and info['scanmode'] == 0 for info in infos]
 
     if auto_process_bidi:  # see which recs we want to auto-estimate dead pixels for
         odd_row_ndead = [None if bidi else 0 for bidi in is_bidi]
         odd_row_offset = [None if bidi else 0 for bidi in is_bidi]
-        if is32 is None:
-            is32 = any(is_bidi) and dead_pix_nan in [None, True]
+        if to32 is None:
+            to32 = any(is_bidi) and dead_pix_nan in [None, True]
     else:
         odd_row_ndead = [odd_row_ndead] * len(filenames)
         odd_row_offset = [odd_row_offset] * len(filenames)
-        if is32 is None:
-            is32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_nan in [None, True]
+        if to32 is None:
+            to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_nan in [None, True]
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
