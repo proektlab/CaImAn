@@ -9,8 +9,9 @@ import numpy as np
 from numpy import fft
 import os
 import scipy
+from scipy import ndimage
 import tifffile
-from typing import Iterable, Union, Optional
+from typing import Iterable, Union, Optional, Callable
 
 DimSubindices = Union[Iterable[int], slice]
 FileSubindices = Union[DimSubindices, Iterable[DimSubindices]]  # can have inds for just frames or also for y, x, z
@@ -57,7 +58,8 @@ def _todict(matobj) -> dict:
 
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
             plane: Optional[int] = None, to32: Optional[bool] = None, auto_process_bidi=True,
-            odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, dead_pix_nan: Optional[Union[str, bool]] = None) -> np.ndarray:
+            odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
+            dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array
 
@@ -79,13 +81,12 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
         to32: bool | None
             whether to read in float32 format (default is to keep as uint16)
             if to32 is None, will be set to True only if necessary to contain nans according to other settings.
-            in this case, setting dead_pix_nan to None is the same as setting it to True (will force using NaNs).
 
         auto_process_bidi: bool
             if true, will automatically estimate dead pixels/offset for bidirectional recordings,
             while assuming they are 0 for unidirectional recordings.
         
-        odd_row_ndead, odd_row_offset, dead_pix_nan: see _sbxread_helper.
+        odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
             odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
     """
     if subindices is None:
@@ -107,16 +108,17 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
             odd_row_offset = 0
     
     if to32 is None:
-        to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_nan in [None, True]
+        to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode == True
 
     return _sbxread_helper(filename, subindices=subindices, channel=channel, plane=plane, chunk_size=None, to32=to32,
-                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, dead_pix_nan=dead_pix_nan)
+                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode, dview=dview)
 
 
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
                bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: int = 1000, auto_process_bidi=True,
-               odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, dead_pix_nan: Optional[Union[str, bool]] = None):
+               odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
+               dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
     """
     Convert a single .sbx file to .tif format
 
@@ -134,7 +136,6 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
         to32: bool | None
             whether to save in float32 format (default is to keep as uint16)
             if to32 is None, will be set to True only if necessary to contain nans according to other settings.
-            in this case, setting dead_pix_nan to None is the same as setting it to True (will force using NaNs).
 
         channel: int | None
             which channel to save (required if data has >1 channel)
@@ -150,7 +151,7 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
             if true, will automatically estimate dead pixels/offset for bidirectional recordings,
             while assuming they are 0 for unidirectional recordings.
         
-        odd_row_ndead, odd_row_offset, dead_pix_nan: see _sbxread_helper.
+        odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
             odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
     """
     # Check filenames
@@ -165,13 +166,15 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
 
     sbx_chain_to_tif([filename], fileout, [subindices], bigtiff=bigtiff, imagej=imagej, to32=to32,
                      channel=channel, plane=plane, chunk_size=chunk_size, auto_process_bidi=auto_process_bidi,
-                     odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, dead_pix_nan=dead_pix_nan)
+                     odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp,
+                     dead_pix_mode=dead_pix_mode, dview=dview)
 
 
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
-                     channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: int = 1000, auto_process_bidi=True,
-                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, dead_pix_nan: Optional[Union[str, bool]] = None) -> None:
+                     channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: int = 1000, auto_process_bidi: bool = True,
+                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
+                     dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
     """
     Concatenate a list of sbx files into one tif file.
     Args:
@@ -186,7 +189,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             can specify separate subindices for each file if nested 2 levels deep; 
             X, Y, and Z sizes must match for all files after indexing.
 
-        odd_row_ndead, odd_row_offset, dead_pix_nan: see _sbxread_helper.
+        odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
             odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
 
         to32, channel, plane, chunk_size, auto_process_bidi: see sbx_to_tif
@@ -217,12 +220,12 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         odd_row_ndead = [None if bidi else 0 for bidi in is_bidi]
         odd_row_offset = [None if bidi else 0 for bidi in is_bidi]
         if to32 is None:
-            to32 = any(is_bidi) and dead_pix_nan in [None, True]
+            to32 = any(is_bidi) and dead_pix_mode == True
     else:
         odd_row_ndead = [odd_row_ndead] * len(filenames)
         odd_row_offset = [odd_row_offset] * len(filenames)
         if to32 is None:
-            to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_nan in [None, True]
+            to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode == True
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
@@ -267,7 +270,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     offset = 0
     for filename, subind, file_N, this_ndead, this_offset in zip(filenames, subindices, all_n_frames_out, odd_row_ndead, odd_row_offset):
         _sbxread_helper(filename, subindices=subind, channel=channel, out=tif_memmap[offset:offset+file_N], plane=plane,
-                        chunk_size=chunk_size, odd_row_ndead=this_ndead, odd_row_offset=this_offset, dead_pix_nan=dead_pix_nan)
+                        chunk_size=chunk_size, odd_row_ndead=this_ndead, odd_row_offset=this_offset, interp=interp,
+                        dead_pix_mode=dead_pix_mode, dview=dview)
         offset += file_N
 
     del tif_memmap  # important to make sure file is closed (on Windows)
@@ -439,7 +443,8 @@ def sbx_meta_data(filename: str):
 
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
                     plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 1000,
-                    odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, dead_pix_nan: Optional[Union[str, bool]] = None) -> np.ndarray:
+                    odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0,
+                    interp=True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array, or into the given memory-mapped file.
 
@@ -478,10 +483,13 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             correct the offset, including moving pixels in the rightmost columns up or down as necessary.
             defaults to 0, but if None, tries to estimate automatically.
         
-        dead_pix_nan: str | bool | None
-            how to replace dead pixels identified by odd_row_nsaturated and odd_row_offset. this can be any
-            valid value for params.motion['border_nan'] except 'min'. Default is 'copy' if writing to int-valued array, else True (= NaN).
-            Note that NaNs are replaced by interpolated values if params.preprocess['check_nan'] is true.
+        interp: bool
+            whether to interpolate dead pixels that fall within the convex hull of known pixels (i.e., from odd_row_offset).
+            otherwise, they will be filled according to dead_pix_mode.
+
+        dead_pix_mode: str | bool
+            how to replace dead pixels identified by odd_row_nsaturated and odd_row_offset. Same options as params.motion['border_nan'],
+            and True (NaN) is invalid if 'to32' is False. if interp is True, this only sets the extrapolation mode.
     """ 
     basename, ext = os.path.splitext(filename)
     if ext == '.sbx':
@@ -558,15 +566,12 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if odd_row_offset != 0:
         logging.info(f'Correcting line phase offset of {odd_row_offset}')
     
-    if (out is None and not to32) or (out is not None and out.dtype.kind != 'f'):
-        # saving to int array, default to copy
-        if dead_pix_nan is None:
-            dead_pix_nan = 'copy'
-        elif dead_pix_nan == True:
-            raise Exception('Cannot write NaN values to int array; dead_pix_nan cannot be True')
-    elif dead_pix_nan is None:  # saving to float array, default to NaNs
-        dead_pix_nan = True
+    if chunk_size is None:
+        # load a contiguous block all at once
+        chunk_size = n_frames_out
+    chunks = [slice(start, min(start + chunk_size, n_frames_out)) for start in range(0, n_frames_out, chunk_size)]
 
+    # create indices for loading data
     if odd_row_ndead == 0 and odd_row_offset == 0:
         # this list specifies how to index the input and output arrays when copying data.
         # format of each entry: (<tuple of out-indices>, <tuple of in-indices>)
@@ -574,39 +579,45 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         # each entry is applied in order.
         inds_sets = [((range(n_frames_out),), np.ix_(*subindices))]
     else:
+        # ensure the selected mode is valid
+        if (out is None and not to32) or (out is not None and out.dtype.kind != 'f') and dead_pix_mode == True:
+            raise Exception('Cannot write NaN values to int array; dead_pix_mode cannot be True')
+        
+        if dead_pix_mode == 'min':
+            # iterate over chunks to find min, note we actually call nanmax b/c values are inverted
+            max_val = np.uint16(0)
+            for chunk_slice in chunks:
+                max_val = max(max_val, np.nanmax(sbx_mmap[subindices[0][chunk_slice]]))
+            dead_pix_mode = np.invert(max_val)
+
         # load even and odd rows separately to implement shift and correct dead pixels
-        inds_sets = _make_inds_sets_with_corrections(n_frames, n_y, n_x, subindices, save_shape,
-                                                     odd_row_ndead, odd_row_offset, dead_pix_nan)
+        inds_sets, interp_spec = _make_inds_sets_with_corrections(n_y, n_x, subindices, save_shape,
+                                                                  odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
-    if chunk_size is None:
-        # load a contiguous block all at once
-        chunk_size = n_frames_out
-
-    n_remaining = n_frames_out
-    offset = 0
-    while n_remaining > 0:
-        this_chunk_size = min(n_remaining, chunk_size)
-
+    for chunk_slice in chunks:
         for out_inds, in_inds in inds_sets:
             if np.isscalar(in_inds):
                 chunk = in_inds
             else:
+                # for advanced indexing
+                time_axis_expanded = np.expand_dims(subindices[0][chunk_slice], axis=[i+1 for i in range(len(in_inds))])
+
                 # Note: important to copy the data here instead of making a view,
                 # so the memmap can be closed (achieved by advanced indexing)
-                chunk = sbx_mmap[(in_inds[0][offset:offset+this_chunk_size],) + in_inds[1:]]
+                chunk = sbx_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
                 # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
                 np.invert(chunk, out=chunk)  # avoid copying, may be large
 
-            if out is None and not to32 and out_inds == (range(n_frames_out),) and this_chunk_size == n_frames_out:
+            if out is None and not to32 and out_inds == (range(n_frames_out),) and chunk_slice == range(0, n_frames_out):
                 # avoid copying again when just loading all data
                 out = chunk
             else:
                 if out is None:
                     out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
-                out[(out_inds[0][offset:offset+this_chunk_size],) + out_inds[1:]] = chunk
+                out[(chunk_slice,) + out_inds] = chunk
 
-        n_remaining -= this_chunk_size
-        offset += this_chunk_size
+        if interp:
+            _interp_offset_pixels(sbx_mmap, time_axis_expanded, out[chunk_slice], interp_spec, dead_pix_mode, dview=dview)
 
     del sbx_mmap  # Important to close file (on Windows)
 
@@ -717,14 +728,17 @@ def _estimate_odd_row_offset(frames: np.ndarray) -> int:
 
 
 IndsList = tuple[np.ndarray, ...]   # (each element an output from np.ix_)
-def _make_inds_sets_with_corrections(n_frames: int, n_y: int, n_x: int, subindices: tuple[Iterable[int], ...],
+def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Iterable[int], ...],
                                      save_shape: tuple[int, ...], odd_row_ndead: int, odd_row_offset: int,
-                                     dead_pix_nan: Union[str, bool]) -> list[tuple[IndsList, Union[int, float, IndsList]]]:
-    """Compute indices/constant values for reading and writing data given dead pixels and/or bidi offset"""
-    out_inds_t = np.arange(save_shape[0])
+                                     dead_pix_mode: Union[str, bool, np.uint16], interp: bool) -> tuple[
+                                         list[tuple[IndsList, Union[int, float, IndsList]]],
+                                         Optional[tuple[tuple[IndsList, IndsList, np.ndarray], tuple[IndsList, IndsList]]]]:
+    """
+    Compute indices/constant values for reading and writing data given dead pixels and/or bidi offset
+    Second output is the output indices that should be interpolated and extrapolated if interp is True, else None.
+    """
     out_inds_y = np.arange(save_shape[1])
     out_inds_x = np.arange(save_shape[2])
-    in_inds_t = np.array(subindices[0]) if len(subindices) > 0 else np.arange(n_frames)
     in_inds_y = np.array(subindices[1]) if len(subindices) > 1 else np.arange(n_y)
     in_inds_x = np.array(subindices[2]) if len(subindices) > 2 else np.arange(n_x)
 
@@ -745,14 +759,14 @@ def _make_inds_sets_with_corrections(n_frames: int, n_y: int, n_x: int, subindic
 
     e2e_mask = (0 <= in_inds_x + even_shift) & (in_inds_x + even_shift < n_x)
     inds_sets.append((
-        np.ix_(out_inds_t, out_inds_y[b_even_row], out_inds_x[e2e_mask]),
-        np.ix_(in_inds_t, in_inds_y[b_even_row], in_inds_x[e2e_mask] + even_shift, *subindices[3:])
+        np.ix_(out_inds_y[b_even_row], out_inds_x[e2e_mask]),
+        np.ix_(in_inds_y[b_even_row], in_inds_x[e2e_mask] + even_shift, *subindices[3:])
     ))
 
     o2o_mask = (odd_row_ndead <= in_inds_x + odd_shift) & (in_inds_x + odd_shift < n_x)
     inds_sets.append((
-        np.ix_(out_inds_t, out_inds_y[~b_even_row], out_inds_x[o2o_mask]),
-        np.ix_(in_inds_t, in_inds_y[~b_even_row], in_inds_x[o2o_mask] + odd_shift, *subindices[3:])
+        np.ix_(out_inds_y[~b_even_row], out_inds_x[o2o_mask]),
+        np.ix_(in_inds_y[~b_even_row], in_inds_x[o2o_mask] + odd_shift, *subindices[3:])
     ))
 
     # wrapping pixels at ends of rows
@@ -762,33 +776,121 @@ def _make_inds_sets_with_corrections(n_frames: int, n_y: int, n_x: int, subindic
     wrap_in_y = in_inds_y[b_even_row == to_even] + (1 if to_even else -1)
     if odd_row_offset != 0:
         inds_sets.append((
-            np.ix_(out_inds_t, wrap_out_y, out_inds_x[wrap_mask]),
-            np.ix_(in_inds_t, wrap_in_y, -(in_inds_x[wrap_mask] + lshift - n_x + 1), *subindices[3:])
+            np.ix_(wrap_out_y, out_inds_x[wrap_mask]),
+            np.ix_(wrap_in_y, -(in_inds_x[wrap_mask] + lshift - n_x + 1), *subindices[3:])
         ))
 
     even_dead_mask = in_inds_x + even_shift < 0
-    odd_dead_mask = in_inds_x + odd_shift < odd_row_ndead 
+    odd_dead_mask = in_inds_x + odd_shift < odd_row_ndead
     
-    if dead_pix_nan == 'copy':
-        inds_sets.append((
-            np.ix_(out_inds_t, out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
-            np.ix_(in_inds_t, in_inds_y[b_even_row], [0], *subindices[3:])
-        ))
+    if interp:
+        interp_mask_x = odd_dead_mask ^ even_dead_mask
+        dead_mask = odd_dead_mask & even_dead_mask
 
-        inds_sets.append((
-            np.ix_(out_inds_t, out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
-            np.ix_(in_inds_t, out_inds_y[~b_even_row], [odd_row_ndead], *subindices[3:])
-        ))
+        interp_even_rows = -even_shift > odd_row_ndead - odd_shift
+        interp_mask_y = b_even_row if interp_even_rows else ~b_even_row
+
+        # format: (<indices for building interpolator from input array>,
+        #          <indices to assign into output array>, <indices relative to interpolator to query>)
+        even_edge = -even_shift
+        odd_edge = odd_row_ndead - odd_shift
+        y_offset = 1 if interp_even_rows else 0
+        x_offset = min(even_edge, odd_edge)
+        x_range = range(x_offset, max(even_edge, odd_edge))
+
+        interp_inds = (
+            np.ix_(range(y_offset, n_y, 2), x_range, *subindices[3:]),
+            np.ix_(out_inds_y[interp_mask_y], out_inds_x[interp_mask_x]),
+            np.stack(np.meshgrid((in_inds_y[interp_mask_y] - y_offset)/2, in_inds_x[interp_mask_x] - x_offset,
+                                 *[range(sz) for sz in save_shape[3:]], indexing='ij'))
+        )
+
+        extrap_inds = (
+            np.ix_(out_inds_y, out_inds_x[dead_mask]),
+            np.ix_(in_inds_y, [x_offset], *subindices[3:])
+        )
+        interp_spec = (interp_inds, extrap_inds)
     else:
-        inds_sets.append((
-            np.ix_(out_inds_t, out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
-            np.nan if dead_pix_nan else 0
-        ))
+        # specify how to fill all dead pixels without interpolating
+        interp_spec = None
 
-        inds_sets.append((
-            np.ix_(out_inds_t, out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
-            np.nan if dead_pix_nan else 0
-        ))
+        if isinstance(dead_pix_mode, bool):
+            dead_pix_mode = np.nan if dead_pix_mode else 0
+
+        if dead_pix_mode == 'copy':
+            inds_sets.append((
+                np.ix_(out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
+                np.ix_(in_inds_y[b_even_row], [0], *subindices[3:])
+            ))
+
+            inds_sets.append((
+                np.ix_(out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
+                np.ix_(out_inds_y[~b_even_row], [odd_row_ndead], *subindices[3:])
+            ))          
+        elif np.isreal(dead_pix_mode):
+            inds_sets.append((
+                np.ix_(out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
+                dead_pix_mode
+            ))
+
+            inds_sets.append((
+                np.ix_(out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
+                dead_pix_mode
+            ))
+        else:
+            raise ValueError('Unrecognized dead pixel mode')
     
-    return inds_sets
+    return inds_sets, interp_spec
     
+
+def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.ndarray, 
+                          interp_spec: tuple[tuple[IndsList, IndsList, np.ndarray], tuple[IndsList, IndsList]],
+                          extrap_mode: Union[str, np.uint16], dview=None, chunk_size=100) -> None:
+    """
+    linearly interpolate pixels from input file (sbx_mmap[in_inds_t]) into given indices (interp_spec) of output file (out),
+    taking odd_row_ndead and odd_row_offset into account. extrap_mode can be 'zero', 'nan', or 'copy'.
+    """
+    interp_inds, extrap_inds = interp_spec
+    construct_inds, assign_inds, query_inds = interp_inds
+    extrap_inds_out, extrap_inds_in = extrap_inds
+    
+    if extrap_mode == False:
+        mode = 'constant'
+        cval = 0
+    elif extrap_mode == True:
+        mode = 'constant'
+        cval = np.nan
+    elif extrap_mode == 'copy':
+        mode = 'nearest'
+        cval = 0
+    elif np.isreal(extrap_mode):
+        mode = 'constant'
+        cval = extrap_mode
+    else:
+        raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
+
+    pars = []
+    in_inds_chunks = np.split(np.squeeze(in_inds_t), in_inds_t.size // chunk_size)
+    for in_inds in in_inds_chunks:
+        pars.append([sbx_mmap[in_inds][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
+
+    logging.info('Interpolating dead pixels...')
+    if dview is not None:
+        res_list = dview.map_sync(_interp_wrapper, pars)
+    else:
+        res_list = map(_interp_wrapper, pars)
+
+    offset = 0
+    for in_inds, res in zip(in_inds_chunks, res_list):
+        out[(slice(offset, offset + len(in_inds)),) + assign_inds] = res
+        offset += len(in_inds)
+        
+    # now do extrapolation on left edge
+    if extrap_mode == 'copy':
+        out[(slice(None),) + extrap_inds_out] = sbx_mmap[(in_inds_t,) + tuple(np.expand_dims(i, 0) for i in extrap_inds_in)]
+    else:
+        out[(slice(None),) + extrap_inds_out] = cval
+
+def _interp_wrapper(params) -> np.ndarray:
+    sbx_data, out_dtype, query_inds, mode, cval = params
+    return np.stack([ndimage.map_coordinates(np.invert(d), query_inds, output=out_dtype, mode=mode, cval=cval) for d in sbx_data])

@@ -184,7 +184,7 @@ def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int
         logging.debug(f"save_memmap_join (loading data): {cleaner_f} {T}")
         tot_frames += T
         if border_to_0 > 0:
-            min_mov = min(min_mov, caiman.movie(Yr).calc_min().item())
+            min_mov = min(min_mov, caiman.movie(Yr[:, :, np.newaxis]).calc_min().item())
         del Yr
 
     d = np.prod(dims)
