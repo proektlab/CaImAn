@@ -577,7 +577,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         # format of each entry: (<tuple of out-indices>, <tuple of in-indices>)
         # or: (<tuple of out-indices>, constant)
         # each entry is applied in order.
-        inds_sets = [((range(n_frames_out),), np.ix_(*subindices))]
+        inds_sets = [((), np.ix_(*subindices[1:]))]
+        interp_spec = None
     else:
         # ensure the selected mode is valid
         if (out is None and not to32) or (out is not None and out.dtype.kind != 'f') and dead_pix_mode == True:
@@ -608,7 +609,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                 # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
                 np.invert(chunk, out=chunk)  # avoid copying, may be large
 
-            if out is None and not to32 and out_inds == (range(n_frames_out),) and chunk_slice == range(0, n_frames_out):
+            if out is None and not to32 and out_inds == () and chunk_slice == range(0, n_frames_out):
                 # avoid copying again when just loading all data
                 out = chunk
             else:
@@ -616,7 +617,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                     out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
                 out[(chunk_slice,) + out_inds] = chunk
 
-        if interp:
+        if interp and interp_spec is not None:
             _interp_offset_pixels(sbx_mmap, time_axis_expanded, out[chunk_slice], interp_spec, dead_pix_mode, dview=dview)
 
     del sbx_mmap  # Important to close file (on Windows)
