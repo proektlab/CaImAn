@@ -292,7 +292,7 @@ def save_portion(pars) -> int:
     # determine which pixels to set to min_mov, if any
     if border_to_0 == 0:
         inds = np.arange(idx_start, idx_end, dtype=int)
-        nx, ny = dims[:2]
+        ny, nx = dims[:2]
         if len(dims) > 2:
             # planes are irrelevant
             inds %= dims[2]
