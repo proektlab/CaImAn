@@ -37,7 +37,7 @@ def _check_keys(checkdict: dict) -> None:
     """
 
     for key in checkdict:
-        if isinstance(checkdict[key], scipy.io.matlab.mio5_params.mat_struct):
+        if isinstance(checkdict[key], scipy.io.matlab.mat_struct):
             checkdict[key] = _todict(checkdict[key])
 
 
@@ -49,7 +49,7 @@ def _todict(matobj) -> dict:
     ret = {}
     for strg in matobj._fieldnames:
         elem = matobj.__dict__[strg]
-        if isinstance(elem, scipy.io.matlab.mio5_params.mat_struct):
+        if isinstance(elem, scipy.io.matlab.mat_struct):
             ret[strg] = _todict(elem)
         else:
             ret[strg] = elem
