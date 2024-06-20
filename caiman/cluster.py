@@ -49,7 +49,11 @@ def extract_patch_coordinates(dims: tuple,
     sl_stop = [dim if sl.stop is None else sl.stop for (sl, dim) in zip(indices, dims)]
     sl_step = [1 for sl in indices]    # not used
     dims_large = dims
-    dims = np.minimum(np.array(dims) - border_pix, sl_stop) - np.maximum(border_pix, sl_start)
+
+    # use border_pix for X and Y only
+    border_pix_each = np.zeros(len(dims), dtype=int)
+    border_pix_each[:2] = border_pix
+    dims = np.minimum(np.array(dims) - border_pix_each, sl_stop) - np.maximum(border_pix_each, sl_start)
 
     coords_flat = []
     shapes = []
@@ -76,9 +80,10 @@ def extract_patch_coordinates(dims: tuple,
                 coords_flat.append(coords_.flatten())
             else:      # 3D data
 
-                if border_pix > 0:
-                    raise Exception(
-                        'The parameter border pix must be set to 0 for 3D data since border removal is not implemented')
+                # Will be fine, just assume border_pix only applies to X and Y (Ethan)
+                # if border_pix > 0:
+                #     raise Exception(
+                #         'The parameter border pix must be set to 0 for 3D data since border removal is not implemented')
 
                 for count_2, zz in enumerate(iters[2]):
                     coords_z = np.arange(zz - rf[2], zz + rf[2] + 1)
@@ -87,7 +92,7 @@ def extract_patch_coordinates(dims: tuple,
                     shps = idxs[0].shape
                     shapes.append([shps[1], shps[0], shps[2]])
                     coords[count_0, count_1, count_2] = idxs
-                    coords_ = np.ravel_multi_index(idxs, dims, order='F')
+                    coords_ = np.ravel_multi_index(idxs, dims_large, order='F')
                     coords_flat.append(coords_.flatten())
 
     for i, c in enumerate(coords_flat):
