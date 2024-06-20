@@ -514,7 +514,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
     if channel is None:
         if n_chans > 1:
-            raise Exception('Channel input required for multi-chanel data')
+            raise Exception('Channel input required for multi-channel data')
         channel = 0
     elif channel >= n_chans:
         raise Exception(f'Channel input out of range (data has {n_chans} channels)')

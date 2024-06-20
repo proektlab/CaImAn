@@ -1245,9 +1245,6 @@ def load(file_name: Union[str, list[str]],
     if max(top, bottom, left, right) > 0:
         logging.error('movies.py:load(): Parameters top,bottom,left,right are not supported for single movie input')
 
-    if channel is not None:
-        logging.error('movies.py:load(): channel parameter is not supported for single movie input')
-
     if os.path.exists(file_name):
         basename, extension = os.path.splitext(file_name)
 
@@ -1504,7 +1501,7 @@ def load(file_name: Union[str, list[str]],
         elif extension == '.sbx':
             logging.debug('sbx')
             meta_data = caiman.utils.sbx_utils.sbx_meta_data(basename)
-            input_arr = caiman.utils.sbx_utils.sbxread(basename, subindices)
+            input_arr = caiman.utils.sbx_utils.sbxread(basename, subindices, channel=channel)
             return movie(input_arr, fr=fr,
                          file_name=os.path.split(file_name)[-1],
                          meta_data=meta_data).astype(outtype)
@@ -1539,7 +1536,8 @@ def load_movie_chain(file_list: list[str],
                      z_bottom=0,
                      is3D: bool = False,
                      channel=None,
-                     outtype=np.float32) -> Any:
+                     outtype=np.float32,
+                     pass_channel_to_load=False) -> Any:
     """ load movies from list of file names
 
     Args:
@@ -1568,8 +1566,9 @@ def load_movie_chain(file_list: list[str],
                  subindices=subindices,
                  in_memory=True,
                  outtype=outtype,
-                 var_name_hdf5=var_name_hdf5)
-        if channel is not None:
+                 var_name_hdf5=var_name_hdf5,
+                 channel=(channel if pass_channel_to_load else None))
+        if not pass_channel_to_load and channel is not None:
             logging.debug(m.shape)
             m = m[channel].squeeze()
             logging.debug(f"Movie shape: {m.shape}")
