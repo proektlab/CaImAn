@@ -465,7 +465,7 @@ class Estimates(object):
 
     def nb_view_components_3d(self, Yr=None, image_type='mean', dims=None,
                               max_projection=False, axis=0,
-                              denoised_color=None, cmap='jet', thr=0.9):
+                              denoised_color=None, cmap='jet', thr=0.9, patch_color='purple'):
         """view spatial and temporal components interactively in a notebook
         (version for 3d data)
 
@@ -515,7 +515,7 @@ class Estimates(object):
         caiman.utils.visualization.nb_view_patches3d(self.YrA, self.A, self.C,
                     dims=dims, image_type=image_type, Yr=Yr,
                     max_projection=max_projection, axis=axis, thr=thr,
-                    denoised_color=denoised_color, cmap=cmap)
+                    denoised_color=denoised_color, cmap=cmap, patch_color=patch_color)
 
         return self
 

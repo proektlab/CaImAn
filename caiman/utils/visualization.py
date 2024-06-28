@@ -35,7 +35,7 @@ except:
 try:
     import bokeh
     import bokeh.plotting as bpl
-    from bokeh.models import CustomJS, ColumnDataSource, Range1d, LabelSet
+    from bokeh.models import CustomJS, ColumnDataSource, Range1d, LabelSet, HoverTool
 except:
     print("Bokeh could not be loaded. Either it is not installed or you are not running within a notebook")
 
@@ -465,7 +465,7 @@ def get_contours(A, dims, thr=0.9, thr_method='nrg', swap_dim=False):
 
 
 def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
-                      max_projection=False, axis=0, thr=0.9, denoised_color=None, cmap='jet'):
+                      max_projection=False, axis=0, thr=0.9, denoised_color=None, cmap='jet', patch_color='purple'):
     """
     Interactive plotting utility for ipython notbook
 
@@ -500,6 +500,9 @@ def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
 
         cmap: string
             name of colormap (e.g. 'viridis') used to plot image_neurons
+
+        patch_color: string
+            color used for ROI patches
 
     Raises:
         ValueError "image_type must be 'mean', 'max' or 'corr'"
@@ -641,7 +644,9 @@ def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
 
         cmap = bokeh.models.mappers.LinearColorMapper([matplotlib.colors.rgb2hex(m)
                                                        for m in colormap(np.arange(colormap.N))])
-        cmap.high = image_neurons.max()
+        # cmap.high = image_neurons.max()
+        cmap.low = np.percentile(image_neurons, 20)
+        cmap.high = np.percentile(image_neurons, 99)
         coors = get_contours(A, dims, thr=thr)
         plt.close()
         cc1 = [[(l[:, 0]) for l in n['coordinates']] for n in coors]
@@ -732,7 +737,7 @@ def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
                 source2.change.emit();
             """)
 
-    plot = bpl.figure(width=600, height=300)
+    plot = bpl.figure(sizing_mode="stretch_both", tooltips=[("data (x, y)", "($x, $y)")])
     plot.line('x', 'y', source=source, line_width=1, line_alpha=0.6)
     if denoised_color is not None:
         plot.line('x', 'y2', source=source, line_width=1,
@@ -742,19 +747,19 @@ def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
     slider.js_on_change('value', callback)
     xr = Range1d(start=0, end=image_neurons.shape[1] if max_projection else d3)
     yr = Range1d(start=image_neurons.shape[0] if max_projection else d2, end=0)
-    plot1 = bpl.figure(x_range=xr, y_range=yr, width=300, height=300)
+    plot1 = bpl.figure(x_range=xr, y_range=yr, aspect_ratio=xr.end/yr.start, # not exactly right but good enough?
+                       sizing_mode="scale_height", tooltips=[("data (x, y)", "($x, $y)"), ("value", "@image")])
 
     if max_projection:
         plot1.image(image=[image_neurons], x=0, y=0,
                     dw=image_neurons.shape[1], dh=image_neurons.shape[0], palette=grayp)
-        plot1.patch('c1x', 'c2x', alpha=0.6, color='purple',
+        plot1.patch('c1x', 'c2x', alpha=0.6, color=patch_color,
                     line_width=2, source=source2)
-        plot1.patch('c1y', 'c2y', alpha=0.6, color='purple',
+        plot1.patch('c1y', 'c2y', alpha=0.6, color=patch_color,
                     line_width=2, source=source2)
-        plot1.patch('c1z', 'c2z', alpha=0.6, color='purple',
+        plot1.patch('c1z', 'c2z', alpha=0.6, color=patch_color,
                     line_width=2, source=source2)
-        layout = bokeh.layouts.layout([[slider], [bokeh.layouts.row(plot1, plot)]],
-                                      sizing_mode="scale_width")
+        layout = bokeh.layouts.layout([[slider]], sizing_mode="stretch_width", resizable="height", min_height=400)
     else:
         slider_layer = bokeh.models.Slider(start=1, end=d1, value=linit + 1, step=1,
                                            title="Layer")
@@ -765,12 +770,14 @@ def nb_view_patches3d(Y_r, A, C, dims, image_type='mean', Yr=None,
         callback_layer.args['slider_layer'] = slider_layer
         plot1.image(image='image', x='x', y='y', dw='dw', dh='dh',
                     color_mapper=cmap, source=source3)
-        plot1.patch('c1', 'c2', alpha=0.6, color='purple',
+        plot1.patch('c1', 'c2', alpha=0.6, color=patch_color,
                     line_width=2, source=source2)
-        layout = bokeh.layouts.layout([[slider], [slider_layer], [bokeh.layouts.row(plot1, plot)]],
-                                      sizing_mode="scale_width")
+        layout = bokeh.layouts.layout([[slider], [slider_layer]],
+                                      sizing_mode="stretch_width", resizable="height", min_height=400)
     if Y_r.shape[0] == 1:
-        layout = bokeh.layouts.row(plot1, plot)
+        layout = bokeh.layouts.row(plot1, plot, height=plot.height, sizing_mode="scale_width")
+    else:
+        layout.children.append(bokeh.layouts.row(plot1, plot, sizing_mode="stretch_both"))
     bpl.show(layout)
 
     return Y_r
