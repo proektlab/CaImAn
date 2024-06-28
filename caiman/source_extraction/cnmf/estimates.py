@@ -487,7 +487,7 @@ class Estimates(object):
 
     def nb_view_components_3d(self, Yr=None, image_type='mean', dims=None,
                               max_projection=False, axis=0,
-                              denoised_color=None, cmap='jet', thr=0.9) -> None:
+                              denoised_color=None, cmap='jet', thr=0.9, patch_color='purple') -> None:
         """view spatial and temporal components interactively in a notebook
         (version for 3d data)
 
