@@ -876,7 +876,9 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         pars.append([sbx_mmap[in_inds][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
 
     logging.info('Interpolating dead pixels...')
-    if dview is not None:
+    if 'multiprocessing' in str(type(dview)):
+        res_list = dview.map_async(_interp_wrapper, pars).get(4294967)
+    elif dview is not None:
         res_list = dview.map_sync(_interp_wrapper, pars)
     else:
         res_list = map(_interp_wrapper, pars)
