@@ -22,8 +22,10 @@ import scipy
 import skimage
 import sklearn
 import sys
+from tempfile import NamedTemporaryFile
 import threading
 import tifffile
+import time
 from tqdm import tqdm
 from typing import Any, Optional, Union
 import warnings
@@ -33,6 +35,7 @@ from zipfile import ZipFile
 import caiman.base.timeseries
 import caiman.base.traces
 import caiman.mmapping
+import caiman.paths
 import caiman.summary_images
 import caiman.utils.sbx_utils
 import caiman.utils.visualization
@@ -2197,22 +2200,31 @@ def play_movie(movie,
             tooltip='Description',
             icon='square' # (FontAwesome names without the `fa-` prefix)
         )
+
         def view(button):
-            display_handle=display(None, display_id=True)
-            frame_sum = 0
-            for iddxx, frame in enumerate(load_iter(movie, subindices, var_name_hdf5) if it else movie[subindices]):
-                frame_sum += frame
-                if (iddxx+1) % tsub == 0:
-                    frame = process_frame(iddxx, frame_sum/tsub, bord_px, magnification, interpolation, minmov, maxmov, gain, offset, plot_text)
-                    frame_sum = 0
-                    new_data = Image(data=cv2.imencode('.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes())
-                    clear_output(wait=True)
-                    display(new_data)
-                    # display_handle.update(Image(data=cv2.imencode(
-                    #         '.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes()))
-                    plt.pause(1. / fr)
-                if stopButton.value==True:
-                    break
+            # save one frame at a time to a temporary file
+            temp_dir = caiman.paths.get_tempdir()
+            with NamedTemporaryFile(dir=temp_dir, suffix='.jpg') as frame_file:
+                frame_sum = 0
+                for iddxx, frame in enumerate(load_iter(movie, subindices, var_name_hdf5) if it else movie[subindices]):
+                    frame_sum += frame
+                    if (iddxx+1) % tsub == 0:
+                        frame = process_frame(iddxx, frame_sum/tsub, bord_px, magnification, interpolation, minmov, maxmov, gain, offset, plot_text)
+                        frame_sum = 0
+                        frame_file.seek(0)
+                        cv2.imencode('.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tofile(frame_file)
+                        if iddxx + 1 == tsub:
+                            image = Image(frame_file.name)
+                            display_handle=display(image, display_id=True)
+                            start = time.time()
+                        else:
+                            plt.pause(max(0, 1. / fr - ((newstart := time.time()) - start)))
+                            start = newstart
+                            image.reload()
+                        # display_handle.update(Image(data=cv2.imencode(
+                        #         '.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes()))
+                    if stopButton.value==True:
+                        break
         display(stopButton)
         thread = threading.Thread(target=view, args=(stopButton,))
         thread.start()
