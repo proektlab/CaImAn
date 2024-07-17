@@ -9,7 +9,7 @@ Contains the movie class.
 import cv2
 from functools import partial
 import h5py
-from IPython.display import display, Image
+from IPython.display import display, Image, clear_output
 import ipywidgets as widgets
 import logging
 import matplotlib
@@ -2205,8 +2205,11 @@ def play_movie(movie,
                 if (iddxx+1) % tsub == 0:
                     frame = process_frame(iddxx, frame_sum/tsub, bord_px, magnification, interpolation, minmov, maxmov, gain, offset, plot_text)
                     frame_sum = 0
-                    display_handle.update(Image(data=cv2.imencode(
-                            '.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes()))
+                    new_data = Image(data=cv2.imencode('.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes())
+                    clear_output(wait=True)
+                    display(new_data)
+                    # display_handle.update(Image(data=cv2.imencode(
+                    #         '.jpg', np.clip((frame * 255.), 0, 255).astype('u1'))[1].tobytes()))
                     plt.pause(1. / fr)
                 if stopButton.value==True:
                     break
