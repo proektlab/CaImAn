@@ -5,6 +5,7 @@ Utility functions for Neurolabware Scanbox files (.sbx)
 """
 
 import logging
+import math
 import numpy as np
 from numpy import fft
 import os
@@ -581,7 +582,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         interp_spec = None
     else:
         # ensure the selected mode is valid
-        if (out is None and not to32) or (out is not None and out.dtype.kind != 'f') and dead_pix_mode == True:
+        if ((out is None and not to32) or (out is not None and out.dtype.kind != 'f')) and dead_pix_mode == True:
             raise Exception('Cannot write NaN values to int array; dead_pix_mode cannot be True')
         
         if dead_pix_mode == 'min':
@@ -871,10 +872,10 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
     pars = []
-    in_inds_chunks = np.split(np.squeeze(in_inds_t), in_inds_t.size // chunk_size)
+    in_inds_chunks = np.split(np.squeeze(in_inds_t), math.ceil(in_inds_t.size / chunk_size))
     for in_inds in in_inds_chunks:
         pars.append([sbx_mmap[in_inds][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
-
+        
     logging.info('Interpolating dead pixels...')
     if 'multiprocessing' in str(type(dview)):
         res_list = dview.map_async(_interp_wrapper, pars).get(4294967)
