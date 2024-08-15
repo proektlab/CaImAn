@@ -598,27 +598,20 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         inds_sets, interp_spec = _make_inds_sets_with_corrections(n_y, n_x, subindices, save_shape,
                                                                   odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
-    for chunk_slice in chunks:
-        for out_inds, in_inds in inds_sets:
-            if np.isscalar(in_inds):
-                chunk = in_inds
-            else:
-                # for advanced indexing
-                time_axis_expanded = np.expand_dims(subindices[0][chunk_slice], axis=[i+1 for i in range(len(in_inds))])
+    if out is None:
+        out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
+    
+    # prepare for parallel processing
+    if 'multiprocessing' not in str(type(dview)) or not isinstance(out, np.memmap):
+        map_fn = map
+    else:
+        map_fn = dview.imap_unordered
 
-                # Note: important to copy the data here instead of making a view,
-                # so the memmap can be closed (achieved by advanced indexing)
-                chunk = sbx_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
-                # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
-                np.invert(chunk, out=chunk)  # avoid copying, may be large
-
-            if out is None and not to32 and out_inds == () and chunk_slice == range(0, n_frames_out):
-                # avoid copying again when just loading all data
-                out = chunk
-            else:
-                if out is None:
-                    out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
-                out[(chunk_slice,) + out_inds] = chunk
+    args = [
+        [out[chunk_slice], subindices[0][chunk_slice], inds_sets, sbx_mmap]
+        for chunk_slice in chunks
+    ]
+    map_fn(_load_movie_chunk, tqdm(args, desc='Converting movie in chunks...', unit='chunk'))
 
     if interp and interp_spec is not None:
         _interp_offset_pixels(sbx_mmap, subindices[0], out, interp_spec, dead_pix_mode, dview=dview)
@@ -628,6 +621,23 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if isinstance(out, np.memmap):
         out.flush()    
     return out
+
+
+def _load_movie_chunk(args):
+    out, time_axis, inds_sets, in_mmap = args
+    for out_inds, in_inds in inds_sets:
+        if np.isscalar(in_inds):
+            chunk = in_inds
+        else:
+            # for advanced indexing
+            time_axis_expanded = np.expand_dims(time_axis, axis=[i+1 for i in range(len(in_inds))])
+
+            # Note: important to copy the data here instead of making a view,
+            # so the memmap can be closed (achieved by advanced indexing)
+            chunk = in_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
+            # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
+            np.invert(chunk, out=chunk)  # avoid copying, may be large
+        out[(slice(None),) + out_inds] = chunk
 
 
 def _interpret_subindices(subindices: DimSubindices, dim_extent: int) -> tuple[Iterable[int], int]:
