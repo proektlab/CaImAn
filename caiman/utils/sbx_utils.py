@@ -5,7 +5,6 @@ Utility functions for Neurolabware Scanbox files (.sbx)
 """
 
 import logging
-import math
 import numpy as np
 from numpy import fft
 import os
@@ -13,7 +12,7 @@ import scipy
 from scipy import ndimage
 import tifffile
 from tqdm import tqdm
-from typing import Iterable, Union, Optional, Callable
+from typing import Iterable, Union, Optional
 
 DimSubindices = Union[Iterable[int], slice]
 FileSubindices = Union[DimSubindices, Iterable[DimSubindices]]  # can have inds for just frames or also for y, x, z
@@ -621,8 +620,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                     out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
                 out[(chunk_slice,) + out_inds] = chunk
 
-        if interp and interp_spec is not None:
-            _interp_offset_pixels(sbx_mmap, time_axis_expanded, out[chunk_slice], interp_spec, dead_pix_mode, dview=dview)
+    if interp and interp_spec is not None:
+        _interp_offset_pixels(sbx_mmap, subindices[0], out, interp_spec, dead_pix_mode, dview=dview)
 
     del sbx_mmap  # Important to close file (on Windows)
 
@@ -876,9 +875,8 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
-    in_inds_chunks = np.split(np.squeeze(in_inds_t), math.ceil(in_inds_t.size / chunk_size))
-    chunk_offsets = np.insert(np.cumsum([len(chunk) for chunk in in_inds_chunks]), 0, 0)
-    out_inds = [range(chunk_offsets[i], chunk_offsets[i+1]) for i in range(len(chunk_offsets) - 1)]
+    out_inds = [range(start, min(start + chunk_size, in_inds_t.size)) for start in range(0, in_inds_t.size, chunk_size)]
+    in_inds_chunks = [np.squeeze(in_inds_t)[chunk] for chunk in out_inds]
 
     inplace = isinstance(out, np.memmap) and out.filename is not None and not (
         dview is not None and 'multiprocessing' not in str(type(dview)))  # ipyparallel, may span multiple nodes
@@ -886,13 +884,14 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     pars = []
     for ts_in, ts_out in zip(in_inds_chunks, out_inds):
         if inplace:
+            logging.info('Using inplace interpolation method')
             pars.append([sbx_mmap, ts_in, construct_inds,
                         out, ts_out, assign_inds,
                         out.dtype, query_inds, mode, cval])
         else:
             pars.append([sbx_mmap[ts_in][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
         
-    pars = tqdm(pars, desc='Interpolating dead pixels...')
+    pars = tqdm(pars, desc='Interpolating dead pixels...', unit='chunk')
     map_fn = _interp_wrapper_inplace if inplace else _interp_wrapper
         
     if 'multiprocessing' in str(type(dview)):
