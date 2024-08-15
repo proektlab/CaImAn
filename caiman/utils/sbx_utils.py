@@ -874,22 +874,25 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
     pars = []
-    in_inds_chunks = np.split(np.squeeze(in_inds_t), math.ceil(in_inds_t.size / chunk_size))
-    for in_inds in in_inds_chunks:
-        pars.append([sbx_mmap[in_inds][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
+    # in_inds_chunks = np.split(np.squeeze(in_inds_t), math.ceil(in_inds_t.size / chunk_size))
+    for t_out, t_in in enumerate(np.squeeze(in_inds_t)):
+        #pars.append([sbx_mmap[in_inds][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
+        pars.append([sbx_mmap, t_in, construct_inds,
+                     out, t_out, assign_inds,
+                     out.dtype, query_inds, mode, cval])
         
     logging.info('Interpolating dead pixels...')
     if 'multiprocessing' in str(type(dview)):
-        res_list = dview.map_async(_interp_wrapper, pars).get(4294967)
+        dview.imap_unordered(_interp_wrapper, pars, chunksize=chunk_size)
     elif dview is not None:
-        res_list = dview.map_sync(_interp_wrapper, pars)
+        dview.map_sync(_interp_wrapper, pars)
     else:
-        res_list = map(_interp_wrapper, pars)
+        map(_interp_wrapper, pars)
 
-    offset = 0
-    for in_inds, res in zip(in_inds_chunks, res_list):
-        out[(slice(offset, offset + len(in_inds)),) + assign_inds] = res
-        offset += len(in_inds)
+    # offset = 0
+    # for in_inds, res in zip(in_inds_chunks, res_list):
+    #     out[(slice(offset, offset + len(in_inds)),) + assign_inds] = res
+    #     offset += len(in_inds)
         
     # now do extrapolation on left edge
     if extrap_mode == 'copy':
@@ -897,6 +900,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         out[(slice(None),) + extrap_inds_out] = cval
 
-def _interp_wrapper(params) -> np.ndarray:
-    sbx_data, out_dtype, query_inds, mode, cval = params
-    return np.stack([ndimage.map_coordinates(np.invert(d), query_inds, output=out_dtype, mode=mode, cval=cval) for d in sbx_data])
+def _interp_wrapper(params) -> None:
+    data_in, t_in, in_inds_spatial, data_out, t_out, out_inds_spatial, out_dtype, query_inds, mode, cval = params
+    frame_in = np.invert(data_in[(t_in,) + in_inds_spatial])
+    data_out[(t_out,) + out_inds_spatial] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, mode=mode, cval=cval)
