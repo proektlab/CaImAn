@@ -605,7 +605,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if 'multiprocessing' not in str(type(dview)) or not isinstance(out, np.memmap):
         map_fn = map
     else:
-        map_fn = dview.imap_unordered
+        map_fn = dview.map
 
     args = [
         [out[chunk_slice], subindices[0][chunk_slice], inds_sets, sbx_mmap]
@@ -614,7 +614,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     map_fn(_load_movie_chunk, tqdm(args, desc='Converting movie in chunks...', unit='chunk'))
 
     if interp and interp_spec is not None:
-        _interp_offset_pixels(sbx_mmap, subindices[0], out, interp_spec, dead_pix_mode, dview=dview)
+        _interp_offset_pixels(sbx_mmap, np.array(subindices[0]), out, interp_spec, dead_pix_mode, dview=dview)
 
     del sbx_mmap  # Important to close file (on Windows)
 
@@ -905,7 +905,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     map_fn = _interp_wrapper_inplace if inplace else _interp_wrapper
         
     if 'multiprocessing' in str(type(dview)):
-        res_list = dview.imap_unordered(map_fn, pars)
+        res_list = dview.map(map_fn, pars)
     elif dview is not None:
         res_list = dview.map_sync(map_fn, pars)
     else:
