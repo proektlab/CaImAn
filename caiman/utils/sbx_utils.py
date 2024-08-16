@@ -899,12 +899,13 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     out_inds = [range(start, min(start + chunk_size, in_inds_t.size)) for start in range(0, in_inds_t.size, chunk_size)]
     in_inds_chunks = [np.squeeze(in_inds_t)[chunk] for chunk in out_inds]
     
+    inverted_chunks = (np.invert(sbx_mmap[ts_in]) for ts_in in in_inds_chunks)
     pars = (
-        [sbx_mmap[ts_in][(slice(None),) + construct_inds],
-         out.dtype, query_inds, mode, cval, extrap_inds_in]
-        for ts_in in in_inds_chunks
+        [inv_chunk[(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval, extrap_inds_in]
+        for inv_chunk in inverted_chunks
     )
 
+    # do interpolation
     if 'multiprocessing' in str(type(dview)):
         res_iter = dview.imap(_interp_wrapper, pars)
     elif dview is not None:
@@ -912,28 +913,22 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         res_iter = map(_interp_wrapper, pars)
     
-    for ts_out, res in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'),
-                            res_iter):
+    # collect results and do extrapolation
+    for ts_out, res, inv_chunk in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'),
+                                      res_iter, inverted_chunks):
         if isinstance(res, AsyncResult):
             res = res.get()
-        interp_res, extrap_res = res
-        out[(ts_out,) + assign_inds] = interp_res
+        extrap_res = cval if extrap_inds_in is None else inv_chunk[(slice(None),) + extrap_inds_in]
+        out[(ts_out,) + assign_inds] = res
         out[(ts_out,) + extrap_inds_out] = extrap_res
 
 def _interp_wrapper(params) -> np.ndarray:
     """Map function to use when data have to be sent to each worker"""
-    data_in, out_dtype, query_inds, mode, cval, extrap_inds_in = params
-    data_in_inv = np.invert(data_in)
-    data_out = np.empty((len(data_in),) + query_inds.shape[1:], dtype=out_dtype)
+    data_in_inv, out_dtype, query_inds, mode, cval, extrap_inds_in = params
+    data_out = np.empty((len(data_in_inv),) + query_inds.shape[1:], dtype=out_dtype)
     
     for frame_in, frame_out in zip(data_in_inv, data_out):
         frame_out[:] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, order=1, mode=mode, cval=cval)
 
-    # extrapolation
-    if extrap_inds_in is None:
-        extrap_out = cval
-    else:
-        extrap_out = data_in_inv[(slice(None),) + extrap_inds_in]
-
-    return data_out, extrap_out
+    return data_out
     
