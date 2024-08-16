@@ -3,7 +3,7 @@
 """
 Utility functions for Neurolabware Scanbox files (.sbx)
 """
-
+from ipyparallel import AsyncResult
 import logging
 import numpy as np
 from numpy import fft
@@ -605,13 +605,15 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if 'multiprocessing' not in str(type(dview)) or not isinstance(out, np.memmap):
         map_fn = map
     else:
-        map_fn = dview.map
+        map_fn = dview.imap_unordered
 
     args = [
         [out[chunk_slice], subindices[0][chunk_slice], inds_sets, sbx_mmap]
         for chunk_slice in chunks
     ]
-    map_fn(_load_movie_chunk, tqdm(args, desc='Converting movie in chunks...', unit='chunk'))
+    with tqdm(total=len(args), desc='Converting movie in chunks...', unit='chunk') as pbar:
+        for _ in map_fn(_load_movie_chunk, args):
+            pbar.update()
 
     if interp and interp_spec is not None:
         _interp_offset_pixels(sbx_mmap, np.array(subindices[0]), out, interp_spec, dead_pix_mode, dview=dview)
@@ -890,34 +892,42 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
 
     inplace = isinstance(out, np.memmap) and out.filename is not None and not (
         dview is not None and 'multiprocessing' not in str(type(dview)))  # ipyparallel, may span multiple nodes
-
-    pars = []
-    for ts_in, ts_out in zip(in_inds_chunks, out_inds):
-        if inplace:
-            logging.info('Using inplace interpolation method')
-            pars.append([sbx_mmap, ts_in, construct_inds,
-                        out, ts_out, assign_inds,
-                        out.dtype, query_inds, mode, cval])
-        else:
-            pars.append([sbx_mmap[ts_in][(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval])
-        
-    pars = tqdm(pars, desc='Interpolating dead pixels...', unit='chunk')
-    map_fn = _interp_wrapper_inplace if inplace else _interp_wrapper
-        
-    if 'multiprocessing' in str(type(dview)):
-        res_list = dview.map(map_fn, pars)
-    elif dview is not None:
-        res_list = dview.map_sync(map_fn, pars)
+    
+    if inplace:
+        logging.info('Using inplace interpolation method')
+        parallel_fn = _interp_wrapper_inplace
+        pars = [
+            [sbx_mmap, ts_in, construct_inds,
+             out, ts_out, assign_inds,
+             out.dtype, query_inds, mode, cval]
+            for ts_in, ts_out in zip(in_inds_chunks, out_inds)]
     else:
-        res_list = map(map_fn, pars)
+        logging.info('Using copy interpolation method')
+        parallel_fn = _interp_wrapper
+        pars = [
+            [sbx_mmap[ts_in][(slice(None),) + construct_inds],
+             out.dtype, query_inds, mode, cval]
+            for ts_in in in_inds_chunks
+        ]
 
-    if not inplace:
-        for ts_out, res in zip(out_inds, res_list):
-            out[(ts_out,) + assign_inds] = res
-        
+    if 'multiprocessing' in str(type(dview)):
+        res_iter = dview.imap(parallel_fn, pars)
+    elif dview is not None:
+        res_iter = dview.map_async(parallel_fn, pars)
+    else:
+        res_iter = map(parallel_fn, pars)
+    
+    with tqdm(total=len(pars), desc='Interpolating dead pixels...', unit='chunk') as pbar:
+        for ts_out, res in zip(out_inds, res_iter):
+            if isinstance(res, AsyncResult):
+                res = res.get()
+            if not inplace:
+                out[(ts_out,) + assign_inds] = res
+            pbar.update()
+
     # now do extrapolation on left edge
     if extrap_mode == 'copy':
-        out[(slice(None),) + extrap_inds_out] = sbx_mmap[(in_inds_t,) + tuple(np.expand_dims(i, 0) for i in extrap_inds_in)]
+        out[(slice(None),) + extrap_inds_out] = sbx_mmap[in_inds_t][(slice(None),) + extrap_inds_in]
     else:
         out[(slice(None),) + extrap_inds_out] = cval
 
