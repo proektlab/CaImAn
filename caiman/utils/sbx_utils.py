@@ -12,9 +12,9 @@ import scipy
 from scipy import ndimage
 import tifffile
 from tqdm import tqdm
-from typing import Iterable, Union, Optional
+from typing import Iterable, Union, Optional, Sequence
 
-DimSubindices = Union[Iterable[int], slice]
+DimSubindices = Union[Sequence[int], slice]
 FileSubindices = Union[DimSubindices, Iterable[DimSubindices]]  # can have inds for just frames or also for y, x, z
 ChainSubindices = Union[FileSubindices, Iterable[FileSubindices]]  # one to apply to each file, or separate for each file
 
@@ -527,7 +527,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if frame_size <= 0:
         raise Exception('Invalid scanbox metadata')
 
-    save_shape, subindices = _get_output_shape(data_shape, subindices)
+    save_shape, subind_seqs = _get_output_shape(data_shape, subindices)
     n_frames_out = save_shape[0]
     if plane is not None:
         if len(save_shape) < 4:
@@ -545,8 +545,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if not is3D:  # squeeze out singleton plane dim
         sbx_mmap = sbx_mmap[..., 0]
     elif plane is not None:  # select plane relative to subindices
-        sbx_mmap = sbx_mmap[..., subindices[-1][plane]]
-        subindices = subindices[:-1]
+        sbx_mmap = sbx_mmap[..., subind_seqs[-1][plane]]
+        subind_seqs = subind_seqs[:-1]
     assert isinstance(sbx_mmap, np.memmap)
 
     # estimate dead pixels if necessary
@@ -580,7 +580,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         # format of each entry: (<tuple of spatial out-indices>, <tuple of spatial in-indices>)
         # or: (<tuple of spatial out-indices>, constant)
         # each entry is applied in order.
-        inds_sets = [((), np.ix_(*subindices[1:]))]
+        inds_sets = [((), np.ix_(*subind_seqs[1:]))]
         interp_spec = None
     else:
         # ensure the selected mode is valid
@@ -591,11 +591,11 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             # iterate over chunks to find min, note we actually call nanmax b/c values are inverted
             max_val = np.uint16(0)
             for chunk_slice in chunks:
-                max_val = max(max_val, np.nanmax(sbx_mmap[subindices[0][chunk_slice]]))
+                max_val = max(max_val, np.nanmax(sbx_mmap[subind_seqs[0][chunk_slice]]))
             dead_pix_mode = np.invert(max_val)
 
         # load even and odd rows separately to implement shift and correct dead pixels
-        inds_sets, interp_spec = _make_inds_sets_with_corrections(n_y, n_x, subindices, save_shape,
+        inds_sets, interp_spec = _make_inds_sets_with_corrections(n_y, n_x, subind_seqs, save_shape,
                                                                   odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
     if out is None:
@@ -608,7 +608,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         map_fn = dview.imap_unordered
 
     args = [
-        [out[chunk_slice], subindices[0][chunk_slice], inds_sets, sbx_mmap]
+        [out[chunk_slice], subind_seqs[0][chunk_slice], inds_sets, sbx_mmap]
         for chunk_slice in chunks
     ]
     with tqdm(total=len(args), desc='Converting movie in chunks...', unit='chunk') as pbar:
@@ -616,7 +616,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             pbar.update()
 
     if interp and interp_spec is not None:
-        _interp_offset_pixels(sbx_mmap, np.array(subindices[0]), out, interp_spec, dead_pix_mode, dview=dview)
+        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out, interp_spec, dead_pix_mode, dview=dview)
 
     del sbx_mmap  # Important to close file (on Windows)
 
@@ -642,7 +642,7 @@ def _load_movie_chunk(args):
         out[(slice(None),) + out_inds] = chunk
 
 
-def _interpret_subindices(subindices: DimSubindices, dim_extent: int) -> tuple[Iterable[int], int]:
+def _interpret_subindices(subindices: DimSubindices, dim_extent: int) -> tuple[Sequence[int], int]:
     """
     Given the extent of a dimension in the corresponding recording, obtain an iterable over subindices 
     and the step size (or 0 if the step size is not uniform).
@@ -667,7 +667,7 @@ def _interpret_subindices(subindices: DimSubindices, dim_extent: int) -> tuple[I
 
 
 def _get_output_shape(filename_or_shape: Union[str, tuple[int, ...]], subindices: FileSubindices
-                      ) -> tuple[tuple[int, ...], FileSubindices]:
+                      ) -> tuple[tuple[int, ...], tuple[Sequence[int], ...]]:
     """
     Helper to determine what shape will be loaded/saved given subindices
     Also returns back the subindices with slices transformed to ranges, for convenience
@@ -688,7 +688,7 @@ def _get_output_shape(filename_or_shape: Union[str, tuple[int, ...]], subindices
         raise Exception('Too many dimensions in subdindices')
     
     shape_out = [n_frames, n_y, n_x, n_planes] if is3D else [n_frames, n_y, n_x]
-    subinds_out = []
+    subinds_out: list[Sequence[int]] = []
     for i, (dim, subind) in enumerate(zip(shape_out, subindices)):
         iterable_elements = _interpret_subindices(subind, dim)[0]
         shape_out[i] = len(iterable_elements)
@@ -925,26 +925,26 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
                 out[(ts_out,) + assign_inds] = res
             pbar.update()
 
-    # now do extrapolation on left edge
-    if extrap_mode == 'copy':
-        out[(slice(None),) + extrap_inds_out] = sbx_mmap[in_inds_t][(slice(None),) + extrap_inds_in]
-    else:
-        out[(slice(None),) + extrap_inds_out] = cval
-
-
 def _interp_wrapper(params) -> np.ndarray:
     """Map function to use when data have to be sent to each worker"""
-    data_in, out_dtype, query_inds, mode, cval = params
+    data_in, out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out = params
     data_out = np.empty((len(data_in),) + query_inds.shape[1:], dtype=out_dtype)
     _interp_wrapper_inplace([data_in, range(len(data_in)), (),
                              data_out, range(len(data_out)), (),
-                             out_dtype, query_inds, mode, cval])
+                             out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out])
     return data_out
 
 
 def _interp_wrapper_inplace(params) -> None:
     """Map function to use when input and output arrays are accessible as memmaps"""
-    data_in, ts_in, in_inds_spatial, data_out, ts_out, out_inds_spatial, out_dtype, query_inds, mode, cval = params
+    (data_in, ts_in, in_inds_spatial, data_out, ts_out, out_inds_spatial,
+     out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out) = params
     for t_in, t_out in zip(ts_in, ts_out):
         frame_in = np.invert(data_in[t_in][in_inds_spatial])
         data_out[(t_out,) + out_inds_spatial] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, order=1, mode=mode, cval=cval)
+
+        # extrapolation
+        if extrap_inds_in is None:
+            data_out[(t_out,) + extrap_inds_out] = cval
+        else:
+            data_out[(t_out,) + extrap_inds_out] = np.invert(data_in[t_in][extrap_inds_in])
