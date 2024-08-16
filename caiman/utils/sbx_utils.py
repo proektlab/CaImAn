@@ -602,18 +602,24 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
     
     # prepare for parallel processing
-    if 'multiprocessing' not in str(type(dview)) or not isinstance(out, np.memmap):
-        map_fn = map
+    if dview is not None:
+        if 'multiprocessing'in str(type(dview)):
+            map_fn = dview.imap
+        else:
+            map_fn = dview.map_async
     else:
-        map_fn = dview.imap_unordered
+        map_fn = map
 
-    args = [
-        [out[chunk_slice], subind_seqs[0][chunk_slice], inds_sets, sbx_mmap]
+    args = (
+        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out.dtype]
         for chunk_slice in chunks
-    ]
-    with tqdm(total=len(args), desc='Converting movie in chunks...', unit='chunk') as pbar:
-        for _ in map_fn(_load_movie_chunk, args):
-            pbar.update()
+    )
+
+    for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args),
+                                  tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')):
+        if isinstance(chunk, AsyncResult):
+            chunk = chunk.get()
+        out[chunk_slice] = chunk
 
     if interp and interp_spec is not None:
         _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out, interp_spec, dead_pix_mode, dview=dview)
@@ -626,20 +632,23 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
 
 def _load_movie_chunk(args):
-    out, time_axis, inds_sets, in_mmap = args
+    inds_sets, in_arr, out_shape, out_dtype = args
+    out = np.empty((in_arr.shape[0],) + out_shape, dtype=out_dtype)
     for out_inds, in_inds in inds_sets:
         if np.isscalar(in_inds):
             chunk = in_inds
         else:
             # for advanced indexing
-            time_axis_expanded = np.expand_dims(time_axis, axis=[i+1 for i in range(len(in_inds))])
+            #time_axis_expanded = np.expand_dims(time_axis, axis=[i+1 for i in range(len(in_inds))])
 
             # Note: important to copy the data here instead of making a view,
             # so the memmap can be closed (achieved by advanced indexing)
-            chunk = in_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
+            #chunk = in_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
+            chunk = in_arr[(slice(None),) + in_inds]
             # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
             np.invert(chunk, out=chunk)  # avoid copying, may be large
         out[(slice(None),) + out_inds] = chunk
+    return out
 
 
 def _interpret_subindices(subindices: DimSubindices, dim_extent: int) -> tuple[Sequence[int], int]:
@@ -889,62 +898,42 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
 
     out_inds = [range(start, min(start + chunk_size, in_inds_t.size)) for start in range(0, in_inds_t.size, chunk_size)]
     in_inds_chunks = [np.squeeze(in_inds_t)[chunk] for chunk in out_inds]
-
-    inplace = isinstance(out, np.memmap) and out.filename is not None and not (
-        dview is not None and 'multiprocessing' not in str(type(dview)))  # ipyparallel, may span multiple nodes
     
-    if inplace:
-        logging.info('Using inplace interpolation method')
-        parallel_fn = _interp_wrapper_inplace
-        pars = [
-            [sbx_mmap, ts_in, construct_inds,
-             out, ts_out, assign_inds,
-             out.dtype, query_inds, mode, cval]
-            for ts_in, ts_out in zip(in_inds_chunks, out_inds)]
-    else:
-        logging.info('Using copy interpolation method')
-        parallel_fn = _interp_wrapper
-        pars = [
-            [sbx_mmap[ts_in][(slice(None),) + construct_inds],
-             out.dtype, query_inds, mode, cval]
-            for ts_in in in_inds_chunks
-        ]
+    pars = (
+        [sbx_mmap[ts_in][(slice(None),) + construct_inds],
+         out.dtype, query_inds, mode, cval, extrap_inds_in]
+        for ts_in in in_inds_chunks
+    )
 
     if 'multiprocessing' in str(type(dview)):
-        res_iter = dview.imap(parallel_fn, pars)
+        res_iter = dview.imap(_interp_wrapper, pars)
     elif dview is not None:
-        res_iter = dview.map_async(parallel_fn, pars)
+        res_iter = dview.map_async(_interp_wrapper, pars)
     else:
-        res_iter = map(parallel_fn, pars)
+        res_iter = map(_interp_wrapper, pars)
     
-    with tqdm(total=len(pars), desc='Interpolating dead pixels...', unit='chunk') as pbar:
-        for ts_out, res in zip(out_inds, res_iter):
-            if isinstance(res, AsyncResult):
-                res = res.get()
-            if not inplace:
-                out[(ts_out,) + assign_inds] = res
-            pbar.update()
+    for ts_out, res in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'),
+                            res_iter):
+        if isinstance(res, AsyncResult):
+            res = res.get()
+        interp_res, extrap_res = res
+        out[(ts_out,) + assign_inds] = interp_res
+        out[(ts_out,) + extrap_inds_out] = extrap_res
 
 def _interp_wrapper(params) -> np.ndarray:
     """Map function to use when data have to be sent to each worker"""
-    data_in, out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out = params
+    data_in, out_dtype, query_inds, mode, cval, extrap_inds_in = params
+    data_in_inv = np.invert(data_in)
     data_out = np.empty((len(data_in),) + query_inds.shape[1:], dtype=out_dtype)
-    _interp_wrapper_inplace([data_in, range(len(data_in)), (),
-                             data_out, range(len(data_out)), (),
-                             out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out])
-    return data_out
+    
+    for frame_in, frame_out in zip(data_in_inv, data_out):
+        frame_out[:] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, order=1, mode=mode, cval=cval)
 
+    # extrapolation
+    if extrap_inds_in is None:
+        extrap_out = cval
+    else:
+        extrap_out = data_in_inv[(slice(None),) + extrap_inds_in]
 
-def _interp_wrapper_inplace(params) -> None:
-    """Map function to use when input and output arrays are accessible as memmaps"""
-    (data_in, ts_in, in_inds_spatial, data_out, ts_out, out_inds_spatial,
-     out_dtype, query_inds, mode, cval, extrap_inds_in, extrap_inds_out) = params
-    for t_in, t_out in zip(ts_in, ts_out):
-        frame_in = np.invert(data_in[t_in][in_inds_spatial])
-        data_out[(t_out,) + out_inds_spatial] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, order=1, mode=mode, cval=cval)
-
-        # extrapolation
-        if extrap_inds_in is None:
-            data_out[(t_out,) + extrap_inds_out] = cval
-        else:
-            data_out[(t_out,) + extrap_inds_out] = np.invert(data_in[t_in][extrap_inds_in])
+    return data_out, extrap_out
+    
