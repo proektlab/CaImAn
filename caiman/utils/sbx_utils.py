@@ -896,30 +896,32 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
+    if dview is not None:
+        if 'multiprocessing'in str(type(dview)):
+            map_fn = dview.imap
+        else:
+            map_fn = dview.map_async
+    else:
+        map_fn = map
+    
     out_inds = [range(start, min(start + chunk_size, in_inds_t.size)) for start in range(0, in_inds_t.size, chunk_size)]
     in_inds_chunks = [np.squeeze(in_inds_t)[chunk] for chunk in out_inds]
     
+    # do interpolation and extrapolation
     inverted_chunks = (np.invert(sbx_mmap[ts_in]) for ts_in in in_inds_chunks)
-    pars = (
-        [inv_chunk[(slice(None),) + construct_inds], out.dtype, query_inds, mode, cval, extrap_inds_in]
+    res_iter = (
+        (map_fn(_interp_wrapper, [inv_chunk[(slice(None),) + construct_inds],
+                                  out.dtype, query_inds, mode, cval, extrap_inds_in]),
+         cval if extrap_inds_in is None else inv_chunk[(slice(None),) + extrap_inds_in])
         for inv_chunk in inverted_chunks
     )
-
-    # do interpolation
-    if 'multiprocessing' in str(type(dview)):
-        res_iter = dview.imap(_interp_wrapper, pars)
-    elif dview is not None:
-        res_iter = dview.map_async(_interp_wrapper, pars)
-    else:
-        res_iter = map(_interp_wrapper, pars)
     
     # collect results and do extrapolation
-    for ts_out, res, inv_chunk in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'),
-                                      res_iter, inverted_chunks):
-        if isinstance(res, AsyncResult):
-            res = res.get()
-        extrap_res = cval if extrap_inds_in is None else inv_chunk[(slice(None),) + extrap_inds_in]
-        out[(ts_out,) + assign_inds] = res
+    for ts_out, res in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'), res_iter):
+        interp_res, extrap_res = res
+        if isinstance(interp_res, AsyncResult):
+            interp_res = interp_res.get()
+        out[(ts_out,) + assign_inds] = interp_res
         out[(ts_out,) + extrap_inds_out] = extrap_res
 
 def _interp_wrapper(params) -> np.ndarray:
