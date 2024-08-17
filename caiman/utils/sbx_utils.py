@@ -58,8 +58,8 @@ def _todict(matobj) -> dict:
 
 
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
-            plane: Optional[int] = None, to32: Optional[bool] = None, auto_process_bidi=True,
-            odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
+            plane: Optional[int] = None, to32: Optional[bool] = None, odd_row_ndead: Optional[int] = None,
+            odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False, interp: bool = True,
             dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array
@@ -83,12 +83,12 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
             whether to read in float32 format (default is to keep as uint16)
             if to32 is None, will be set to True only if necessary to contain nans according to other settings.
 
-        auto_process_bidi: bool
-            if true, will automatically estimate dead pixels/offset for bidirectional recordings,
-            while assuming they are 0 for unidirectional recordings.
+        force_estim_ndead_offset: bool
+            when this flag is false (default) and None is passed to odd_row_ndead and/or odd_row_offset, the corrections are
+            estimated automatically for bidirectional recordings and set to 0 for unidirectional recordings.
+            if this flag is true, the behavior is changed to automatically estimate ndead and offset for unidirectional recordings as well.
         
         odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
-            odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
     """
     if subindices is None:
         subindices = slice(None)
@@ -97,16 +97,15 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
     if ext == '.sbx':
         filename = basename
 
-    if auto_process_bidi:
-        # determine whether recording is bidirectional
+    if not force_estim_ndead_offset and (odd_row_ndead is None or odd_row_offset is None):
+        # if recording is unidirectional, switch Nones to 0
         info = loadmat_sbx(filename + '.mat')['info']
-        if 'scanmode' in info and info['scanmode'] == 0:
-            # bidirectional
-            odd_row_ndead = None
-            odd_row_offset = None
-        else:
-            odd_row_ndead = 0
-            odd_row_offset = 0
+        if 'scanmode' in info and info['scanmode'] != 0:
+            # unidirectional
+            if odd_row_ndead is None:
+                odd_row_ndead = 0
+            if odd_row_offset is None:
+                odd_row_offset = 0
     
     if to32 is None:
         to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode == True
@@ -117,9 +116,9 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
 
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
                bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
-               channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 1000, auto_process_bidi=True,
-               odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
-               dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
+               channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
+               odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False,
+               interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
     """
     Convert a single .sbx file to .tif format
 
@@ -148,12 +147,12 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
         chunk_size: int | None
             how many frames to load into memory at once (None = load the whole thing)
         
-        auto_process_bidi: bool
-            if true, will automatically estimate dead pixels/offset for bidirectional recordings,
-            while assuming they are 0 for unidirectional recordings.
+        force_estim_ndead_offset: bool
+            when this flag is false (default) and None is passed to odd_row_ndead and/or odd_row_offset, the corrections are
+            estimated automatically for bidirectional recordings and set to 0 for unidirectional recordings.
+            if this flag is true, the behavior is changed to automatically estimate ndead and offset for unidirectional recordings as well.
         
         odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
-            odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
     """
     # Check filenames
     if fileout is None:
@@ -166,16 +165,16 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
         subindices = slice(None)
 
     sbx_chain_to_tif([filename], fileout, [subindices], bigtiff=bigtiff, imagej=imagej, to32=to32,
-                     channel=channel, plane=plane, chunk_size=chunk_size, auto_process_bidi=auto_process_bidi,
+                     channel=channel, plane=plane, chunk_size=chunk_size, force_estim_ndead_offset=force_estim_ndead_offset,
                      odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp,
                      dead_pix_mode=dead_pix_mode, dview=dview)
 
 
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
-                     channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 1000, auto_process_bidi: bool = True,
-                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp: bool = True,
-                     dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
+                     channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
+                     odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False,
+                     interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
     """
     Concatenate a list of sbx files into one tif file.
     Args:
@@ -191,9 +190,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             X, Y, and Z sizes must match for all files after indexing.
 
         odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
-            odd_row_ndead and odd_row_offset are ignored if auto_process_bidi is True.
 
-        to32, channel, plane, chunk_size, auto_process_bidi: see sbx_to_tif
+        to32, channel, plane, chunk_size, force_estim_ndead_offset: see sbx_to_tif
     """
     if subindices is None:
         subindices = slice(None)
@@ -217,16 +215,20 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     infos = [loadmat_sbx(file + '.mat')['info'] for file in filenames]
     is_bidi = ['scanmode' in info and info['scanmode'] == 0 for info in infos]
 
-    if auto_process_bidi:  # see which recs we want to auto-estimate dead pixels for
-        odd_row_ndead = [None if bidi else 0 for bidi in is_bidi]
-        odd_row_offset = [None if bidi else 0 for bidi in is_bidi]
-        if to32 is None:
-            to32 = any(is_bidi) and dead_pix_mode == True
-    else:
-        odd_row_ndead = [odd_row_ndead] * len(filenames)
-        odd_row_offset = [odd_row_offset] * len(filenames)
-        if to32 is None:
-            to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode == True
+    odd_row_ndead = [odd_row_ndead] * len(filenames)
+    odd_row_offset = [odd_row_offset] * len(filenames)
+    if not force_estim_ndead_offset:
+        # change None to 0 for unidirectional scans
+        if odd_row_ndead is None:
+            odd_row_ndead = [None if bidi else 0 for bidi in is_bidi]
+        if odd_row_offset is None:
+            odd_row_offset = [None if bidi else 0 for bidi in is_bidi]
+
+    if to32 is None:
+        # if we will be adding nans to the final image, must convert to float32
+        to32 = dead_pix_mode == True and (
+            any(ndead != 0 for ndead in odd_row_ndead) or
+            any(offset != 0 for offset in odd_row_offset))
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
@@ -443,7 +445,7 @@ def sbx_meta_data(filename: str):
 
 
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
-                    plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 1000,
+                    plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 100,
                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0,
                     interp=True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
     """
@@ -602,24 +604,32 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
     
     # prepare for parallel processing
-    if dview is not None:
+    if dview is not None and len(chunks) > 1:
         if 'multiprocessing'in str(type(dview)):
             map_fn = dview.imap
         else:
             map_fn = dview.map_async
+        inplace = False
     else:
         map_fn = map
+        inplace = True
 
     args = (
-        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out.dtype]
+        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out.dtype,
+         out if inplace else None]
         for chunk_slice in chunks
     )
 
-    for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args),
-                                  tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')):
+    if len(chunks) > 1:
+        chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
+    else:
+        logging.info('Converting whole movie...')
+
+    for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
         if isinstance(chunk, AsyncResult):
             chunk = chunk.get()
-        out[chunk_slice] = chunk
+        if not inplace:
+            out[chunk_slice] = chunk
 
     if interp and interp_spec is not None:
         _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out, interp_spec, dead_pix_mode, dview=dview)
@@ -632,8 +642,9 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
 
 def _load_movie_chunk(args):
-    inds_sets, in_arr, out_shape, out_dtype = args
-    out = np.empty((in_arr.shape[0],) + out_shape, dtype=out_dtype)
+    inds_sets, in_arr, out_shape, out_dtype, out = args
+    if out is None:
+        out = np.empty((in_arr.shape[0],) + out_shape, dtype=out_dtype)
     for out_inds, in_inds in inds_sets:
         if np.isscalar(in_inds):
             chunk = in_inds
