@@ -896,41 +896,9 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
-    if dview is not None:
-        if 'multiprocessing'in str(type(dview)):
-            map_fn = dview.imap
-        else:
-            map_fn = dview.map_async
-    else:
-        map_fn = map
-    
-    out_inds = [range(start, min(start + chunk_size, in_inds_t.size)) for start in range(0, in_inds_t.size, chunk_size)]
-    in_inds_chunks = [np.squeeze(in_inds_t)[chunk] for chunk in out_inds]
-    
-    # do interpolation and extrapolation
-    inverted_chunks = (np.invert(sbx_mmap[ts_in]) for ts_in in in_inds_chunks)
-    res_iter = (
-        (map_fn(_interp_wrapper, [inv_chunk[(slice(None),) + construct_inds],
-                                  out.dtype, query_inds, mode, cval, extrap_inds_in]),
-         cval if extrap_inds_in is None else inv_chunk[(slice(None),) + extrap_inds_in])
-        for inv_chunk in inverted_chunks
-    )
-    
-    # collect results and do extrapolation
-    for ts_out, res in zip(tqdm(out_inds, desc='Interpolating dead pixels...', unit='chunk'), res_iter):
-        interp_res, extrap_res = res
-        if isinstance(interp_res, AsyncResult):
-            interp_res = interp_res.get()
-        out[(ts_out,) + assign_inds] = interp_res
-        out[(ts_out,) + extrap_inds_out] = extrap_res
-
-def _interp_wrapper(params) -> np.ndarray:
-    """Map function to use when data have to be sent to each worker"""
-    data_in_inv, out_dtype, query_inds, mode, cval, extrap_inds_in = params
-    data_out = np.empty((len(data_in_inv),) + query_inds.shape[1:], dtype=out_dtype)
-    
-    for frame_in, frame_out in zip(data_in_inv, data_out):
-        frame_out[:] = ndimage.map_coordinates(frame_in, query_inds, output=out_dtype, order=1, mode=mode, cval=cval)
-
-    return data_out
+    for t_out, t_in in tqdm(enumerate(np.squeeze(in_inds_t)), total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame'):
+        frame_inv = np.invert(sbx_mmap[t_in])
+        out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds, output=out.dtype,
+                                                          order=1, mode=mode, cval=cval)
+        out[t_out][extrap_inds_out] = cval if extrap_inds_in is None else frame_inv[extrap_inds_in]
     
