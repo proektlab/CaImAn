@@ -444,6 +444,16 @@ def sbx_meta_data(filename: str):
     return meta_data
 
 
+def get_odd_row_ndead(filename: str) -> int:
+    """From sbx file (assumed to be bidirectional), estimate number of dead columns at left of odd rows."""
+    info = loadmat_sbx(filename + '.mat')['info']
+    data_shape = sbx_shape(filename, info)  # (chans, X, Y, Z, frames)
+    sbx_mmap = np.memmap(filename + '.sbx', mode='r', dtype='uint16', shape=data_shape, order='F')
+    sbx_mmap = np.transpose(sbx_mmap, (0, 4, 2, 1, 3))  # to (chans, frames, Y, X, Z)
+    odd_row_ndead = _estimate_odd_row_nsaturated(sbx_mmap[0, 0])
+    return odd_row_ndead
+
+
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
                     plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 100,
                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0,
@@ -623,7 +633,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if len(chunks) > 1:
         chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
     else:
-        logging.info('Converting whole movie...')
+        logging.info('Converting movie...')
 
     for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
         if isinstance(chunk, AsyncResult):
