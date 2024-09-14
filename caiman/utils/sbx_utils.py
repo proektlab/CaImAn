@@ -7,13 +7,12 @@ from ipyparallel import AsyncResult
 import logging
 import numpy as np
 from numpy import fft
-from numpy.typing import NDArray
 import os
 import scipy
 from scipy import ndimage
 import tifffile
 from tqdm import tqdm
-from typing import Iterable, Union, Optional, Sequence, cast, TypeVar, TypeGuard, Any, Callable
+from typing import Union, Optional, Sequence, cast, Any
 
 from trycast import isassignable
 

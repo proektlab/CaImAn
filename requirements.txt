@@ -26,5 +26,6 @@ tensorflow
 tifffile
 tk
 tqdm
+trycast
 yapf
 zarr

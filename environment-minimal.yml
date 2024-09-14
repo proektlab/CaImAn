@@ -27,3 +27,6 @@ dependencies:
 - tifffile
 - tqdm
 - zarr
+- pip
+- pip:
+  - trycast
