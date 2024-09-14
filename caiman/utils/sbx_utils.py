@@ -721,7 +721,7 @@ def _get_output_shape(filename_or_shape: Union[str, tuple[int, ...]], subindices
     Helper to determine what shape will be loaded/saved given subindices
     Also returns back the subindices with slices transformed to ranges, for convenience
     """
-    if isassignable(DimSubindices, subindices):
+    if isassignable(subindices, DimSubindices):
         dim_subindices = cast(DimSubindices, subindices)
         subindices = (dim_subindices,)
     else:
