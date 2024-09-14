@@ -7,18 +7,21 @@ from ipyparallel import AsyncResult
 import logging
 import numpy as np
 from numpy import fft
+from numpy.typing import NDArray
 import os
 import scipy
 from scipy import ndimage
 import tifffile
 from tqdm import tqdm
-from typing import Iterable, Union, Optional, Sequence
+from typing import Iterable, Union, Optional, Sequence, cast, TypeVar, TypeGuard, Any, Callable
+
+from trycast import isassignable
 
 DimSubindices = Union[Sequence[int], slice]
-FileSubindices = Union[DimSubindices, Iterable[DimSubindices]]  # can have inds for just frames or also for y, x, z
-ChainSubindices = Union[FileSubindices, Iterable[FileSubindices]]  # one to apply to each file, or separate for each file
+FileSubindices = Union[DimSubindices, Sequence[DimSubindices]]  # can have inds for just frames or also for y, x, z
+ChainSubindices = Union[FileSubindices, Sequence[FileSubindices]]  # one to apply to each file, or separate for each file
 
-def loadmat_sbx(filename: str) -> dict:
+def loadmat_sbx(filename: str) -> dict[str, Any]:
     """
     this wrapper should be called instead of directly calling spio.loadmat
 
@@ -28,7 +31,7 @@ def loadmat_sbx(filename: str) -> dict:
     """
     data_ = scipy.io.loadmat(filename, struct_as_record=False, squeeze_me=True)
     _check_keys(data_)
-    return data_
+    return data_['info']
 
 
 def _check_keys(checkdict: dict) -> None:
@@ -99,7 +102,7 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
 
     if not force_estim_ndead_offset and (odd_row_ndead is None or odd_row_offset is None):
         # if recording is unidirectional, switch Nones to 0
-        info = loadmat_sbx(filename + '.mat')['info']
+        info = loadmat_sbx(filename + '.mat')
         if 'scanmode' in info and info['scanmode'] != 0:
             # unidirectional
             if odd_row_ndead is None:
@@ -170,6 +173,27 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
                      dead_pix_mode=dead_pix_mode, dview=dview)
 
 
+def broadcast_chain_subindices(maybe_subindices: Optional[ChainSubindices], n_files: int) -> Sequence[FileSubindices]:
+    subindices = slice(None) if maybe_subindices is None else maybe_subindices
+
+    # Validate aggressively to avoid failing after waiting to copy a lot of data
+    if isassignable(subindices, DimSubindices):
+        # subindices over time to repeat for each file
+        dim_subindices = cast(DimSubindices, subindices)
+        chain_subindices = [(dim_subindices,)] * n_files
+    elif isassignable(subindices, FileSubindices):
+        # sequence of dimension subindices to repeat for each file
+        file_subindices = cast(FileSubindices, subindices)
+        chain_subindices = [file_subindices] * n_files
+    else:
+        # sequence of sequences of dimension subindices
+        chain_subindices = cast(Sequence[FileSubindices], subindices)
+        if len(chain_subindices) != n_files:
+            # Must be a separate subindices for each file; must match number of files
+            raise Exception('Length of subindices does not match length of file list')    
+    return chain_subindices
+
+
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
@@ -196,44 +220,30 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         all_n_frames_out: list[int]
             number of frames from each file saved to the output
     """
-    if subindices is None:
-        subindices = slice(None)
-
-    # Validate aggressively to avoid failing after waiting to copy a lot of data
-    if isinstance(subindices, slice) or np.isscalar(subindices[0]):
-        # One set of subindices to repeat for each file
-        subindices = [(subindices,) for _ in filenames]
-
-    elif isinstance(subindices[0], slice) or np.isscalar(subindices[0][0]):
-        # Interpret this as being an iterable over dimensions to repeat for each file
-        subindices = [subindices for _ in filenames]
-
-    elif len(subindices) != len(filenames):
-        # Must be a separate subindices for each file; must match number of files
-        raise Exception('Length of subindices does not match length of file list')        
+    subindices = broadcast_chain_subindices(subindices, len(filenames))     
 
     # Check if any files are bidirectional
     basenames, exts = zip(*[os.path.splitext(file) for file in filenames])
     filenames = [bn if ext == '.sbx' else fn for fn, bn, ext in zip(filenames, basenames, exts)]
 
-    odd_row_ndead = [odd_row_ndead] * len(filenames)
-    odd_row_offset = [odd_row_offset] * len(filenames)
+    odd_row_ndeads = [odd_row_ndead] * len(filenames)
+    odd_row_offsets = [odd_row_offset] * len(filenames)
     if not force_estim_ndead_offset:
         # change None to 0 for unidirectional scans
-        for i, (file, ndead, offset) in enumerate(zip(filenames, odd_row_ndead, odd_row_offset)):
-            info = loadmat_sbx(file + '.mat')['info']
+        for i, (file, ndead, offset) in enumerate(zip(filenames, odd_row_ndeads, odd_row_offsets)):
+            info = loadmat_sbx(file + '.mat')
             bidi = 'scanmode' in info and info['scanmode'] == 0
             if not bidi:
                 if ndead is None:
-                    odd_row_ndead[i] = 0
+                    odd_row_ndeads[i] = 0
                 if offset is None:
-                    odd_row_offset[i] = 0
+                    odd_row_offsets[i] = 0
 
     if to32 is None:
         # if we will be adding nans to the final image, must convert to float32
         to32 = dead_pix_mode == True and (
-            any(ndead != 0 for ndead in odd_row_ndead) or
-            any(offset != 0 for offset in odd_row_offset))
+            any(ndead != 0 for ndead in odd_row_ndeads) or
+            any(offset != 0 for offset in odd_row_offsets))
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
@@ -276,8 +286,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     # Now convert each file
     tif_memmap = tifffile.memmap(fileout, series=0)
     offset = 0
-    for filename, subind, file_N, this_ndead, this_offset in zip(filenames, subindices, all_n_frames_out, odd_row_ndead, odd_row_offset):
-        _sbxread_helper(filename, subindices=subind, channel=channel, out=tif_memmap[offset:offset+file_N], plane=plane,
+    for filename, subind, file_N, this_ndead, this_offset in zip(filenames, subindices, all_n_frames_out, odd_row_ndeads, odd_row_offsets):
+        _sbxread_helper(filename, subindices=subind, channel=channel, out=tif_memmap[offset:offset+file_N].view(np.memmap), plane=plane,
                         chunk_size=chunk_size, odd_row_ndead=this_ndead, odd_row_offset=this_offset, interp=interp,
                         dead_pix_mode=dead_pix_mode, dview=dview)
         offset += file_N
@@ -286,7 +296,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     return all_n_frames_out
 
 
-def sbx_shape(filename: str, info: Optional[dict] = None) -> tuple[int, int, int, int, int]:
+def sbx_shape(filename: str, info: Optional[dict[str, Any]] = None) -> tuple[int, int, int, int, int]:
     """
     Args:
         filename: str
@@ -303,7 +313,7 @@ def sbx_shape(filename: str, info: Optional[dict] = None) -> tuple[int, int, int
 
     # Load info
     if info is None:
-        info = loadmat_sbx(filename + '.mat')['info']
+        info = loadmat_sbx(filename + '.mat')
 
     # Image size
     if 'sz' not in info:
@@ -382,7 +392,7 @@ def sbx_meta_data(filename: str):
     if ext == '.sbx':
         filename = basename
     
-    info = loadmat_sbx(filename + '.mat')['info']
+    info = loadmat_sbx(filename + '.mat')
 
     meta_data = dict()
     n_chan, n_x, n_y, n_planes, n_frames = sbx_shape(filename, info)
@@ -452,7 +462,7 @@ def sbx_meta_data(filename: str):
 
 def get_odd_row_ndead(filename: str) -> int:
     """From sbx file (assumed to be bidirectional), estimate number of dead columns at left of odd rows."""
-    info = loadmat_sbx(filename + '.mat')['info']
+    info = loadmat_sbx(filename + '.mat')
     data_shape = sbx_shape(filename, info)  # (chans, X, Y, Z, frames)
     sbx_mmap = np.memmap(filename + '.sbx', mode='r', dtype='uint16', shape=data_shape, order='F')
     sbx_mmap = np.transpose(sbx_mmap, (0, 4, 2, 1, 3))  # to (chans, frames, Y, X, Z)
@@ -515,13 +525,14 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         filename = basename
 
     # Normalize so subindices is a list over dimensions
-    if isinstance(subindices, slice) or np.isscalar(subindices[0]):
-        subindices = [subindices]
+    if isassignable(subindices, DimSubindices):
+        dim_subindices = cast(DimSubindices, subindices)
+        subindices = [dim_subindices]
     else:
-        subindices = list(subindices)
+        subindices = list(cast(Sequence[DimSubindices], subindices))
 
     # Load info
-    info = loadmat_sbx(filename + '.mat')['info']
+    info = loadmat_sbx(filename + '.mat')
 
     # Get shape (and update info)
     data_shape = sbx_shape(filename, info)  # (chans, X, Y, Z, frames)
@@ -617,8 +628,11 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                                                                   odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
     if out is None:
-        out = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
-    
+        out_arr = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
+    else:
+        out_arr = out
+    del out  # ensure out_arr replaces out from here
+
     # prepare for parallel processing
     if dview is not None and len(chunks) > 1:
         if 'multiprocessing'in str(type(dview)):
@@ -631,8 +645,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         inplace = True
 
     args = (
-        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out.dtype,
-         out if inplace else None]
+        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out_arr.dtype,
+         out_arr if inplace else None]
         for chunk_slice in chunks
     )
 
@@ -645,16 +659,16 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         if isinstance(chunk, AsyncResult):
             chunk = chunk.get()
         if not inplace:
-            out[chunk_slice] = chunk
+            out_arr[chunk_slice] = chunk
 
     if interp and interp_spec is not None:
-        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out, interp_spec, dead_pix_mode, dview=dview)
+        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode)
 
     del sbx_mmap  # Important to close file (on Windows)
 
-    if isinstance(out, np.memmap):
-        out.flush()    
-    return out
+    if isinstance(out_arr, np.memmap):
+        out_arr.flush()    
+    return out_arr
 
 
 def _load_movie_chunk(args):
@@ -708,8 +722,11 @@ def _get_output_shape(filename_or_shape: Union[str, tuple[int, ...]], subindices
     Helper to determine what shape will be loaded/saved given subindices
     Also returns back the subindices with slices transformed to ranges, for convenience
     """
-    if isinstance(subindices, slice) or np.isscalar(subindices[0]):
-        subindices = (subindices,)
+    if isassignable(DimSubindices, subindices):
+        dim_subindices = cast(DimSubindices, subindices)
+        subindices = (dim_subindices,)
+    else:
+        subindices = cast(Sequence[DimSubindices], subindices)
     
     n_inds = len(subindices)  # number of dimensions that are indexed
 
@@ -778,11 +795,11 @@ def _estimate_odd_row_offset(frames: np.ndarray) -> int:
     cc = fft.fftshift(cc)
 
     bidiphase = np.argmax(cc[-10 + Lx // 2:11 + Lx // 2]) - 10
-    return bidiphase
+    return bidiphase.item()
 
 
 IndsList = tuple[np.ndarray, ...]   # (each element an output from np.ix_)
-def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Iterable[int], ...],
+def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Sequence[int], ...],
                                      save_shape: tuple[int, ...], odd_row_ndead: int, odd_row_offset: int,
                                      dead_pix_mode: Union[str, bool, np.uint16], interp: bool) -> tuple[
                                          list[tuple[IndsList, Union[int, float, IndsList]]],
@@ -793,11 +810,12 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
     """
     out_inds_y = np.arange(save_shape[1])
     out_inds_x = np.arange(save_shape[2])
-    in_inds_y = np.array(subindices[1]) if len(subindices) > 1 else np.arange(n_y)
-    in_inds_x = np.array(subindices[2]) if len(subindices) > 2 else np.arange(n_x)
+    in_inds = [np.array(subind) for subind in subindices]
+    in_inds_y = in_inds[1] if len(in_inds) > 1 else np.arange(n_y)
+    in_inds_x = in_inds[2] if len(in_inds) > 2 else np.arange(n_x)
 
     b_even_row = in_inds_y % 2 == 0
-    inds_sets = []
+    inds_sets: list[tuple[IndsList, Union[int, float, IndsList]]] = []
 
     # when odd_row_offset is odd, shift right 1 pixel more than alternate rows are shifted left
     # (so 1 pixel gets "eaten")
@@ -814,13 +832,13 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
     e2e_mask = (0 <= in_inds_x + even_shift) & (in_inds_x + even_shift < n_x)
     inds_sets.append((
         np.ix_(out_inds_y[b_even_row], out_inds_x[e2e_mask]),
-        np.ix_(in_inds_y[b_even_row], in_inds_x[e2e_mask] + even_shift, *subindices[3:])
+        np.ix_(in_inds_y[b_even_row], in_inds_x[e2e_mask] + even_shift, *in_inds[3:])
     ))
 
     o2o_mask = (odd_row_ndead <= in_inds_x + odd_shift) & (in_inds_x + odd_shift < n_x)
     inds_sets.append((
         np.ix_(out_inds_y[~b_even_row], out_inds_x[o2o_mask]),
-        np.ix_(in_inds_y[~b_even_row], in_inds_x[o2o_mask] + odd_shift, *subindices[3:])
+        np.ix_(in_inds_y[~b_even_row], in_inds_x[o2o_mask] + odd_shift, *in_inds[3:])
     ))
 
     # wrapping pixels at ends of rows
@@ -831,7 +849,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
     if odd_row_offset != 0:
         inds_sets.append((
             np.ix_(wrap_out_y, out_inds_x[wrap_mask]),
-            np.ix_(wrap_in_y, -(in_inds_x[wrap_mask] + lshift - n_x + 1), *subindices[3:])
+            np.ix_(wrap_in_y, -(in_inds_x[wrap_mask] + lshift - n_x + 1), *in_inds[3:])
         ))
 
     even_dead_mask = in_inds_x + even_shift < 0
@@ -850,10 +868,10 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
         odd_edge = odd_row_ndead - odd_shift
         y_offset = 1 if interp_even_rows else 0
         x_offset = min(even_edge, odd_edge)
-        x_range = range(x_offset, max(even_edge, odd_edge))
+        x_range = np.arange(x_offset, max(even_edge, odd_edge))
 
         interp_inds = (
-            np.ix_(range(y_offset, n_y, 2), x_range, *subindices[3:]),
+            np.ix_(np.arange(y_offset, n_y, 2), x_range, *in_inds[3:]),
             np.ix_(out_inds_y[interp_mask_y], out_inds_x[interp_mask_x]),
             np.stack(np.meshgrid((in_inds_y[interp_mask_y] - y_offset)/2, in_inds_x[interp_mask_x] - x_offset,
                                  *[range(sz) for sz in save_shape[3:]], indexing='ij'))
@@ -861,7 +879,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
 
         extrap_inds = (
             np.ix_(out_inds_y, out_inds_x[dead_mask]),
-            np.ix_(in_inds_y, [x_offset], *subindices[3:])
+            np.ix_(in_inds_y, np.array([x_offset]), *in_inds[3:])
         )
         interp_spec = (interp_inds, extrap_inds)
     else:
@@ -869,27 +887,30 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
         interp_spec = None
 
         if isinstance(dead_pix_mode, bool):
-            dead_pix_mode = np.nan if dead_pix_mode else 0
+            dead_pix_mode_ext = np.nan if dead_pix_mode else 0
+        else:
+            dead_pix_mode_ext = dead_pix_mode    
+        del dead_pix_mode
 
-        if dead_pix_mode == 'copy':
+        if dead_pix_mode_ext == 'copy':
             inds_sets.append((
                 np.ix_(out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
-                np.ix_(in_inds_y[b_even_row], [0], *subindices[3:])
+                np.ix_(in_inds_y[b_even_row], np.array([0]), *in_inds[3:])
             ))
 
             inds_sets.append((
                 np.ix_(out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
-                np.ix_(out_inds_y[~b_even_row], [odd_row_ndead], *subindices[3:])
+                np.ix_(out_inds_y[~b_even_row], np.array([odd_row_ndead]), *in_inds[3:])
             ))          
-        elif np.isreal(dead_pix_mode):
+        elif np.isreal(dead_pix_mode_ext):
             inds_sets.append((
                 np.ix_(out_inds_y[b_even_row], out_inds_x[even_dead_mask]),
-                dead_pix_mode
+                float(dead_pix_mode_ext)
             ))
 
             inds_sets.append((
                 np.ix_(out_inds_y[~b_even_row], out_inds_x[odd_dead_mask]),
-                dead_pix_mode
+                float(dead_pix_mode_ext)
             ))
         else:
             raise ValueError('Unrecognized dead pixel mode')
@@ -899,7 +920,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Itera
 
 def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.ndarray, 
                           interp_spec: tuple[tuple[IndsList, IndsList, np.ndarray], tuple[IndsList, IndsList]],
-                          extrap_mode: Union[str, np.uint16], dview=None, chunk_size=100) -> None:
+                          extrap_mode: Union[str, bool, np.uint16]) -> None:
     """
     linearly interpolate pixels from input file (sbx_mmap[in_inds_t]) into given indices (interp_spec) of output file (out),
     taking odd_row_ndead and odd_row_offset into account. extrap_mode can be 'zero', 'nan', or 'copy'.
@@ -919,7 +940,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         cval = 0
     elif np.isreal(extrap_mode):
         mode = 'constant'
-        cval = extrap_mode
+        cval = float(extrap_mode)
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
