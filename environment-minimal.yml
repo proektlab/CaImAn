@@ -32,3 +32,6 @@ dependencies:
 - torchvision
 - tqdm
 - zarr
+- pip
+- pip:
+  - trycast

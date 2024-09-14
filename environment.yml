@@ -44,3 +44,6 @@ dependencies:
 - tqdm
 - yapf
 - zarr
+- pip
+- pip:
+  - trycast

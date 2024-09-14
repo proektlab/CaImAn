@@ -48,6 +48,7 @@ dependencies = [
   "tabulate",
   "torchvision",
   "tifffile",
+  "trycast",
   "tqdm",
   "yapf",
   "zarr"
