@@ -174,7 +174,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
                      odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False,
-                     interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
+                     interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> list[int]:
     """
     Concatenate a list of sbx files into one tif file.
     Args:
@@ -192,6 +192,9 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
 
         to32, channel, plane, chunk_size, force_estim_ndead_offset: see sbx_to_tif
+    Returns:
+        all_n_frames_out: list[int]
+            number of frames from each file saved to the output
     """
     if subindices is None:
         subindices = slice(None)
@@ -212,17 +215,19 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     # Check if any files are bidirectional
     basenames, exts = zip(*[os.path.splitext(file) for file in filenames])
     filenames = [bn if ext == '.sbx' else fn for fn, bn, ext in zip(filenames, basenames, exts)]
-    infos = [loadmat_sbx(file + '.mat')['info'] for file in filenames]
-    is_bidi = ['scanmode' in info and info['scanmode'] == 0 for info in infos]
 
     odd_row_ndead = [odd_row_ndead] * len(filenames)
     odd_row_offset = [odd_row_offset] * len(filenames)
     if not force_estim_ndead_offset:
         # change None to 0 for unidirectional scans
-        if odd_row_ndead is None:
-            odd_row_ndead = [None if bidi else 0 for bidi in is_bidi]
-        if odd_row_offset is None:
-            odd_row_offset = [None if bidi else 0 for bidi in is_bidi]
+        for i, (file, ndead, offset) in enumerate(zip(filenames, odd_row_ndead, odd_row_offset)):
+            info = loadmat_sbx(file + '.mat')['info']
+            bidi = 'scanmode' in info and info['scanmode'] == 0
+            if not bidi:
+                if ndead is None:
+                    odd_row_ndead[i] = 0
+                if offset is None:
+                    odd_row_offset[i] = 0
 
     if to32 is None:
         # if we will be adding nans to the final image, must convert to float32
@@ -278,6 +283,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         offset += file_N
 
     del tif_memmap  # important to make sure file is closed (on Windows)
+    return all_n_frames_out
 
 
 def sbx_shape(filename: str, info: Optional[dict] = None) -> tuple[int, int, int, int, int]:
