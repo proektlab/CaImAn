@@ -593,7 +593,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         # estimate at 3 different frames in case it changes 
         n_samps = min(len(sbx_mmap), 3)
         sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
-        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample_frames)
+        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame].view(np.memmap))
+                             for frame in sample_frames)
         if odd_row_ndead == 0:
             logging.info('Found no dead pixels at left of odd rows')
 
@@ -943,7 +944,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
                           extrap_mode: Union[str, bool, np.uint16]) -> None:
     """
     linearly interpolate pixels from input file (sbx_mmap[in_inds_t]) into given indices (interp_spec) of output file (out),
-    taking odd_row_ndead and odd_row_offset into account. extrap_mode can be 'zero', 'nan', or 'copy'.
+    taking odd_row_ndead and odd_row_offset into account. extrap_mode can be True, False, 'copy', or a float to fill with.
     """
     interp_inds, extrap_inds = interp_spec
     construct_inds, assign_inds, query_inds = interp_inds
@@ -968,5 +969,10 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         frame_inv = np.invert(sbx_mmap[t_in])
         out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds, output=out.dtype,
                                                           order=1, mode=mode, cval=cval)
-        out[t_out][extrap_inds_out] = cval if extrap_inds_in is None else frame_inv[extrap_inds_in]
+        if mode == 'constant':
+            out[t_out][extrap_inds_out] = cval
+        else:
+            # apply interpolation result to input as well so that extrapolation is correct
+            frame_inv[tuple(query_inds)] = out[t_out][assign_inds]
+        out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
     
