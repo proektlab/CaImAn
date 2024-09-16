@@ -238,11 +238,12 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
                 if offset is None:
                     odd_row_offsets[i] = 0
 
+    might_do_correction = (
+        any(ndead != 0 for ndead in odd_row_ndeads) or
+        any(offset != 0 for offset in odd_row_offsets))
     if to32 is None:
         # if we will be adding nans to the final image, must convert to float32
-        to32 = dead_pix_mode == True and (
-            any(ndead != 0 for ndead in odd_row_ndeads) or
-            any(offset != 0 for offset in odd_row_offsets))
+        to32 = dead_pix_mode == True and might_do_correction
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
@@ -283,13 +284,23 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
                      dtype=dtype, photometric='MINISBLACK', align=tifffile.TIFF.ALLOCATIONGRANULARITY)
 
     # Now convert each file
+    # set up for parallel processing
+    offsets = np.insert(np.cumsum(all_n_frames_out), 0, 0)  # frame offset for each file
+    frame_slices = [slice(offset0, offset1) for offset0, offset1 in zip(offsets[:-1], offsets[1:])]
     tif_memmap = tifffile.memmap(fileout, series=0)
-    offset = 0
-    for filename, subind, file_N, this_ndead, this_offset in zip(filenames, subindices, all_n_frames_out, odd_row_ndeads, odd_row_offsets):
-        _sbxread_helper(filename, subindices=subind, channel=channel, out=tif_memmap[offset:offset+file_N].view(np.memmap), plane=plane,
-                        chunk_size=chunk_size, odd_row_ndead=this_ndead, odd_row_offset=this_offset, interp=interp,
-                        dead_pix_mode=dead_pix_mode, dview=dview)
-        offset += file_N
+    args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, this_ndead, this_offset, interp, dead_pix_mode)
+            for filename, subind, frame_slice, this_ndead, this_offset in zip(filenames, subindices, frame_slices, odd_row_ndeads, odd_row_offsets))
+    
+    if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
+        if 'multiprocessing' in str(type(dview)):
+            map_fn = dview.imap_unordered
+        else:
+            map_fn = dview.map_async
+        for res in map_fn(_sbxread_worker, args):
+            if isinstance(res, AsyncResult):
+                res.get()
+    else:
+        map(_sbxread_worker, args, [dview] * len(filenames))
 
     del tif_memmap  # important to make sure file is closed (on Windows)
     return all_n_frames_out
@@ -671,6 +682,13 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if isinstance(out_arr, np.memmap):
         out_arr.flush()    
     return out_arr
+
+
+def _sbxread_worker(args, dview=None):
+    """For calling _sbxread_helper in parallel"""
+    filename, subindices, channel, plane, out, to32, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
+    return _sbxread_helper(filename=filename, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32,
+                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode, dview=dview)
 
 
 def _load_movie_chunk(args):
