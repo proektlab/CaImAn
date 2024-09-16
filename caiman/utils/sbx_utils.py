@@ -581,8 +581,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     if odd_row_ndead is None:
         # estimate at 3 different frames in case it changes 
         n_samps = min(len(sbx_mmap), 3)
-        sample = sbx_mmap[np.linspace(0, n_samps, endpoint=False, dtype=int)]
-        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample)
+        sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
+        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample_frames)
         if odd_row_ndead == 0:
             logging.info('Found no dead pixels at left of odd rows')
 
