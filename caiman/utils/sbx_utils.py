@@ -826,7 +826,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Seque
                                      save_shape: tuple[int, ...], odd_row_ndead: int, odd_row_offset: int,
                                      dead_pix_mode: Union[str, bool, np.uint16], interp: bool) -> tuple[
                                          list[tuple[IndsList, Union[int, float, IndsList]]],
-                                         Optional[tuple[tuple[IndsList, IndsList, np.ndarray], tuple[IndsList, IndsList]]]]:
+                                         Optional[tuple[tuple[IndsList, IndsList, IndsList], tuple[IndsList, IndsList]]]]:
     """
     Compute indices/constant values for reading and writing data given dead pixels and/or bidi offset
     Second output is the output indices that should be interpolated and extrapolated if interp is True, else None.
@@ -896,8 +896,8 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Seque
         interp_inds = (
             np.ix_(np.arange(y_offset, n_y, 2), x_range, *in_inds[3:]),
             np.ix_(out_inds_y[interp_mask_y], out_inds_x[interp_mask_x]),
-            np.stack(np.meshgrid((in_inds_y[interp_mask_y] - y_offset)/2, in_inds_x[interp_mask_x] - x_offset,
-                                 *[range(sz) for sz in save_shape[3:]], indexing='ij'))
+            ((in_inds_y[interp_mask_y] - y_offset)/2, in_inds_x[interp_mask_x] - x_offset,
+             *[np.arange(sz) for sz in save_shape[3:]])
         )
 
         extrap_inds = (
@@ -942,7 +942,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Seque
     
 
 def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.ndarray, 
-                          interp_spec: tuple[tuple[IndsList, IndsList, np.ndarray], tuple[IndsList, IndsList]],
+                          interp_spec: tuple[tuple[IndsList, IndsList, IndsList], tuple[IndsList, IndsList]],
                           extrap_mode: Union[str, bool, np.uint16]) -> None:
     """
     linearly interpolate pixels from input file (sbx_mmap[in_inds_t]) into given indices (interp_spec) of output file (out),
@@ -952,6 +952,8 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     construct_inds, assign_inds, query_inds = interp_inds
     extrap_inds_out, extrap_inds_in = extrap_inds
     
+    query_inds_grid = np.stack(np.meshgrid(*query_inds, indexing='ij'))
+
     if extrap_mode == False:
         mode = 'constant'
         cval = 0
@@ -971,7 +973,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     orig_inds = None
     for t_out, t_in in inds_iterator:
         frame_inv = np.invert(sbx_mmap[t_in])
-        out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds, output=out.dtype,
+        out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds_grid, output=out.dtype,
                                                           order=1, mode=mode, cval=cval)
         if mode == 'constant':
             out[t_out][extrap_inds_out] = cval
