@@ -279,34 +279,45 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     if extension not in ['.tif', '.tiff', '.btf']:
         fileout = fileout + '.tif'
 
-    dtype = np.float32 if to32 else np.uint16
+    dtype = np.dtype(np.float32 if to32 else np.uint16)
     # Make the file first so we can pass in bigtiff and imagej options; otherwise could create using tifffile.memmap directly
-    tifffile.imwrite(fileout, data=None, shape=save_shape, bigtiff=bigtiff, imagej=imagej,
-                     dtype=dtype, photometric='MINISBLACK', align=tifffile.TIFF.ALLOCATIONGRANULARITY)
+    res = tifffile.imwrite(fileout, data=None, shape=save_shape, returnoffset=True, bigtiff=bigtiff, imagej=imagej,
+                           dtype=dtype, photometric='MINISBLACK', byteorder='<', align=tifffile.TIFF.ALLOCATIONGRANULARITY)
+    if res is None:
+        raise RuntimeError('Tiff file is not memmappable')
+    tif_data_offset, _ = res 
+    tif_dtype = '<' + dtype.char
 
     # Now convert each file
     # set up for parallel processing
     offsets = np.insert(np.cumsum(all_n_frames_out), 0, 0)  # frame offset for each file
     frame_slices = [slice(offset0, offset1) for offset0, offset1 in zip(offsets[:-1], offsets[1:])]
-    tif_memmap = tifffile.memmap(fileout, series=0)
-    args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
-            for filename, subind, frame_slice, this_ndead, this_offset in zip(filenames, subindices, frame_slices, odd_row_ndeads, odd_row_offsets))
+    byte_offsets = tif_data_offset + np.prod(save_shape[1:]) * dtype.itemsize * np.array(offsets[:-1])
+    shapes = [(d,) + save_shape[1:] for d in np.diff(offsets)]
+    # gather arguments to contsruct memmaps directly in each worker rather than using tiffile.memmap to avoid overhead
+    out_memmap_args = [(fileout, tif_dtype, 'r+', offset, shape, 'C') for offset, shape in zip(byte_offsets, shapes)]
+
+    args = ((out_args, filename, subind, channel, plane, False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
+            for out_args, filename, subind, this_ndead, this_offset in zip(out_memmap_args, filenames, subindices, odd_row_ndeads, odd_row_offsets))
     
     pbar = trange(len(filenames), desc='Converting each file...', unit='file')
     if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
         if 'multiprocessing' in str(type(dview)):
-            map_fn = dview.imap_unordered
+            for res, _ in zip(dview.imap_unordered(_sbxread_worker, args), pbar):
+                pass
         else:
-            map_fn = dview.map_async
-        for res, _ in zip(map_fn(_sbxread_worker, args), pbar):
-            if isinstance(res, AsyncResult):
-                res.get()
+            # ipyparallel, could be across computers so don't do in place
+            tif_memmap = np.memmap(fileout, tif_dtype, 'r+', tif_data_offset, save_shape, 'C')
+            args_not_inplace = ((None,) + a[1:] for a in args)
+            for res, out_slice, _ in zip(dview.map_async(_sbxread_worker, args_not_inplace), frame_slices, pbar):
+                # wait for each AsyncResult
+                tif_memmap[out_slice] = res.get()
+            tif_memmap.flush()
+            del tif_memmap  # important to make sure file is closed (on Windows)
     else:
         for arglist, _ in zip(args, pbar):
             _sbxread_worker(arglist, dview)
     pbar.close()
-
-    del tif_memmap  # important to make sure file is closed (on Windows)
     return all_n_frames_out
 
 
@@ -692,12 +703,21 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
     return out_arr
 
 
-def _sbxread_worker(args, dview=None):
+def _sbxread_worker(args, dview=None) -> np.ndarray:
     """For calling _sbxread_helper in parallel"""
-    filename, subindices, channel, plane, out, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
-    return _sbxread_helper(filename=filename, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
-                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
-                           dview=dview, quiet=True)
+    out_mmap_args, file_in, subindices, channel, plane, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
+    if out_mmap_args is not None:
+        out = np.memmap(*out_mmap_args)
+    else:
+        out = None
+    res = _sbxread_helper(filename=file_in, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
+                          odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
+                          dview=dview, quiet=True) 
+    if out is not None:
+        # inplace, clean up memmap
+        out.flush()
+        del out
+    return res
 
 
 def _load_movie_chunk(args):
@@ -980,7 +1000,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         inds_iterator = tqdm(inds_iterator, total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame')
     orig_inds = None
     for t_out, t_in in inds_iterator:
-        frame_inv = np.invert(sbx_mmap[t_in])
+        frame_inv = np.invert(sbx_mmap[t_in]).astype(out.dtype)
         out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds_grid, output=out.dtype,
                                                           order=1, mode=mode, cval=cval)
         if mode == 'constant':
@@ -995,7 +1015,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
                     for ax, (dim_cind, dim_qind) in enumerate(zip(construct_inds, query_inds))
                 )
             frame_inv[orig_inds] = out[t_out][assign_inds]
-            out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
+            out[t_out][extrap_inds_out] = frame_inv[extrap_inds_in]
     if isinstance(inds_iterator, tqdm):
         inds_iterator.close()
     
