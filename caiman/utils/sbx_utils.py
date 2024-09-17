@@ -288,7 +288,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     offsets = np.insert(np.cumsum(all_n_frames_out), 0, 0)  # frame offset for each file
     frame_slices = [slice(offset0, offset1) for offset0, offset1 in zip(offsets[:-1], offsets[1:])]
     tif_memmap = tifffile.memmap(fileout, series=0)
-    args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, this_ndead, this_offset, interp, dead_pix_mode)
+    args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
             for filename, subind, frame_slice, this_ndead, this_offset in zip(filenames, subindices, frame_slices, odd_row_ndeads, odd_row_offsets))
     
     if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
@@ -660,7 +660,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
     args = (
         [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out_arr.dtype,
-         out_arr if inplace else None]
+         out_arr[chunk_slice] if inplace else None]
         for chunk_slice in chunks
     )
 
@@ -687,8 +687,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
 def _sbxread_worker(args, dview=None):
     """For calling _sbxread_helper in parallel"""
-    filename, subindices, channel, plane, out, to32, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
-    return _sbxread_helper(filename=filename, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32,
+    filename, subindices, channel, plane, out, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
+    return _sbxread_helper(filename=filename, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
                            odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode, dview=dview)
 
 
