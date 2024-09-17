@@ -62,7 +62,7 @@ def _todict(matobj) -> dict:
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
             plane: Optional[int] = None, to32: Optional[bool] = None, odd_row_ndead: Optional[int] = None,
             odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False, interp: bool = True,
-            dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
+            dead_pix_mode: Union[str, bool] = 'copy', dview=None, quiet=False) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array
 
@@ -113,7 +113,8 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
         to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode == True
 
     return _sbxread_helper(filename, subindices=subindices, channel=channel, plane=plane, chunk_size=None, to32=to32,
-                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode, dview=dview)
+                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
+                           dview=dview, quiet=quiet)
 
 
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
@@ -301,7 +302,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             if isinstance(res, AsyncResult):
                 res.get()
     else:
-        map(_sbxread_worker, args, [dview] * len(filenames))
+        for arglist in tqdm(args, total=len(filenames), unit='file'):
+            _sbxread_worker(arglist, dview)
 
     del tif_memmap  # important to make sure file is closed (on Windows)
     return all_n_frames_out
@@ -484,7 +486,7 @@ def get_odd_row_ndead(filename: str) -> int:
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
                     plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 100,
                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0,
-                    interp=True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> np.ndarray:
+                    interp=True, dead_pix_mode: Union[str, bool] = 'copy', dview=None, quiet=False) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array, or into the given memory-mapped file.
 
@@ -596,10 +598,10 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
         odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame].view(np.memmap))
                              for frame in sample_frames)
-        if odd_row_ndead == 0:
+        if not quiet and odd_row_ndead == 0:
             logging.info('Found no dead pixels at left of odd rows')
 
-    if odd_row_ndead > 0:
+    if not quiet and odd_row_ndead > 0:
         logging.info(f'Correcting {odd_row_ndead} dead pixels at left of odd rows')
 
     # estimate row offset if necessary
@@ -607,10 +609,10 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         n_samps = min(len(sbx_mmap), 300)
         sample = sbx_mmap[np.linspace(0, n_samps, endpoint=False, dtype=int)]
         odd_row_offset = _estimate_odd_row_offset(sample)
-        if odd_row_offset == 0:
+        if not quiet and odd_row_offset == 0:
             logging.info(f'Found no line phase offset')
 
-    if odd_row_offset != 0:
+    if not quiet and odd_row_offset != 0:
         logging.info(f'Correcting line phase offset of {odd_row_offset}')
     
     if chunk_size is None:
@@ -665,10 +667,11 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         for chunk_slice in chunks
     )
 
-    if len(chunks) > 1:
-        chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
-    else:
-        logging.info('Converting movie...')
+    if not quiet:
+        if len(chunks) > 1:
+            chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
+        else:
+            logging.info('Converting movie...')
 
     for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
         if isinstance(chunk, AsyncResult):
@@ -679,7 +682,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         chunks.close()
 
     if interp and interp_spec is not None:
-        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode)
+        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode, quiet=quiet)
 
     del sbx_mmap  # Important to close file (on Windows)
 
@@ -692,7 +695,8 @@ def _sbxread_worker(args, dview=None):
     """For calling _sbxread_helper in parallel"""
     filename, subindices, channel, plane, out, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
     return _sbxread_helper(filename=filename, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
-                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode, dview=dview)
+                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
+                           dview=dview, quiet=True)
 
 
 def _load_movie_chunk(args):
@@ -944,7 +948,7 @@ def _make_inds_sets_with_corrections(n_y: int, n_x: int, subindices: tuple[Seque
 
 def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.ndarray, 
                           interp_spec: tuple[tuple[IndsList, IndsList, IndsList], tuple[IndsList, IndsList]],
-                          extrap_mode: Union[str, bool, np.uint16]) -> None:
+                          extrap_mode: Union[str, bool, np.uint16], quiet=False) -> None:
     """
     linearly interpolate pixels from input file (sbx_mmap[in_inds_t]) into given indices (interp_spec) of output file (out),
     taking odd_row_ndead and odd_row_offset into account. extrap_mode can be True, False, 'copy', or a float to fill with.
@@ -970,7 +974,9 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
-    inds_iterator = tqdm(enumerate(np.squeeze(in_inds_t)), total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame')
+    inds_iterator = enumerate(np.squeeze(in_inds_t))
+    if not quiet:
+        inds_iterator = tqdm(inds_iterator, total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame')
     orig_inds = None
     for t_out, t_in in inds_iterator:
         frame_inv = np.invert(sbx_mmap[t_in])
@@ -989,5 +995,6 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
                 )
             frame_inv[orig_inds] = out[t_out][assign_inds]
             out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
-    inds_iterator.close()
+    if isinstance(inds_iterator, tqdm):
+        inds_iterator.close()
     
