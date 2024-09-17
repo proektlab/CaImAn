@@ -11,7 +11,7 @@ import os
 import scipy
 from scipy import ndimage, interpolate
 import tifffile
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from typing import Union, Optional, Sequence, cast, Any
 
 from trycast import isassignable
@@ -292,18 +292,19 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
             for filename, subind, frame_slice, this_ndead, this_offset in zip(filenames, subindices, frame_slices, odd_row_ndeads, odd_row_offsets))
     
-    # if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
-    if False:
+    pbar = trange(len(filenames), desc='Converting each file...', unit='file')
+    if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
         if 'multiprocessing' in str(type(dview)):
             map_fn = dview.imap_unordered
         else:
             map_fn = dview.map_async
-        for res in map_fn(_sbxread_worker, args):
+        for res, _ in zip(map_fn(_sbxread_worker, args), pbar):
             if isinstance(res, AsyncResult):
                 res.get()
     else:
-        for arglist in tqdm(args, total=len(filenames), unit='file'):
+        for arglist, _ in zip(args, pbar):
             _sbxread_worker(arglist, dview)
+    pbar.close()
 
     del tif_memmap  # important to make sure file is closed (on Windows)
     return all_n_frames_out
