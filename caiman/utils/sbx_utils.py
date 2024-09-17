@@ -674,6 +674,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             chunk = chunk.get()
         if not inplace:
             out_arr[chunk_slice] = chunk
+    if isinstance(chunks, tqdm):
+        chunks.close()
 
     if interp and interp_spec is not None:
         _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode)
@@ -965,7 +967,8 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
     else:
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
-    for t_out, t_in in tqdm(enumerate(np.squeeze(in_inds_t)), total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame'):
+    inds_iterator = tqdm(enumerate(np.squeeze(in_inds_t)), total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame')
+    for t_out, t_in in inds_iterator:
         frame_inv = np.invert(sbx_mmap[t_in])
         out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds, output=out.dtype,
                                                           order=1, mode=mode, cval=cval)
@@ -975,4 +978,5 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
             # apply interpolation result to input as well so that extrapolation is correct
             frame_inv[tuple(query_inds)] = out[t_out][assign_inds]
         out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
+    inds_iterator.close()
     
