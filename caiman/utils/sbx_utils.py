@@ -291,7 +291,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     args = ((filename, subind, channel, plane, tif_memmap[frame_slice], False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
             for filename, subind, frame_slice, this_ndead, this_offset in zip(filenames, subindices, frame_slices, odd_row_ndeads, odd_row_offsets))
     
-    if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
+    # if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
+    if False:
         if 'multiprocessing' in str(type(dview)):
             map_fn = dview.imap_unordered
         else:
