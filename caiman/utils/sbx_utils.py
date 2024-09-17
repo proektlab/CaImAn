@@ -9,7 +9,7 @@ import numpy as np
 from numpy import fft
 import os
 import scipy
-from scipy import ndimage
+from scipy import ndimage, interpolate
 import tifffile
 from tqdm import tqdm
 from typing import Union, Optional, Sequence, cast, Any
@@ -968,6 +968,7 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
         raise ValueError(f'Unrecognized extrap_mode "{extrap_mode}"')
 
     inds_iterator = tqdm(enumerate(np.squeeze(in_inds_t)), total=len(in_inds_t), desc='Doing interp/extrapolation...', unit='frame')
+    orig_inds = None
     for t_out, t_in in inds_iterator:
         frame_inv = np.invert(sbx_mmap[t_in])
         out[t_out][assign_inds] = ndimage.map_coordinates(frame_inv[construct_inds], query_inds, output=out.dtype,
@@ -976,7 +977,14 @@ def _interp_offset_pixels(sbx_mmap: np.memmap, in_inds_t: np.ndarray, out: np.nd
             out[t_out][extrap_inds_out] = cval
         else:
             # apply interpolation result to input as well so that extrapolation is correct
-            frame_inv[tuple(query_inds)] = out[t_out][assign_inds]
-        out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
+            if orig_inds is None:
+                # interpolate query indices against construct indices to move back to original image space
+                orig_inds = tuple(
+                    interpolate.interp1d(range(dim_cind.size), dim_cind, kind='linear', axis=ax,
+                                        fill_value='extrapolate')(dim_qind).astype(int)  # type: ignore
+                    for ax, (dim_cind, dim_qind) in enumerate(zip(construct_inds, query_inds))
+                )
+            frame_inv[orig_inds] = out[t_out][assign_inds]
+            out[t_out][extrap_inds_out] = cval if mode == 'constant' else frame_inv[extrap_inds_in]
     inds_iterator.close()
     
