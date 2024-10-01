@@ -448,16 +448,16 @@ class MotionCorrect(object):
         
         if self.pw_rigid is False:
             if self.is3D:
-                m_reg = [apply_shifts_dft(img, (sh[0], sh[1], sh[2]), 0,
+                m_reg = (apply_shifts_dft(img, (sh[0], sh[1], sh[2]), 0,
                                           is_freq=False, border_nan=self.border_nan)
-                         for img, sh in zip(Y, self.shifts_rig)]
+                         for img, sh in zip(Y, self.shifts_rig))
             elif self.shifts_opencv:
-                m_reg = [apply_shift_iteration(img, shift, border_nan=self.border_nan)
-                         for img, shift in zip(Y, self.shifts_rig)]
+                m_reg = (apply_shift_iteration(img, shift, border_nan=self.border_nan)
+                         for img, shift in zip(Y, self.shifts_rig))
             else:
-                m_reg = [apply_shifts_dft(img, (
+                m_reg = (apply_shifts_dft(img, (
                     sh[0], sh[1]), 0, is_freq=False, border_nan=self.border_nan) for img, sh in zip(
-                    Y, self.shifts_rig)]
+                    Y, self.shifts_rig))
         else:
             # take potential upsampling into account when recreating patch grid
             dims = Y.shape[1:]
@@ -465,35 +465,36 @@ class MotionCorrect(object):
                                               shifts_opencv=self.shifts_opencv, upsample_factor_grid=self.upsample_factor_grid)
             if self.is3D:
                 # x_shifts_els and y_shifts_els are switched intentionally
-                m_reg = [
+                m_reg = (
                     apply_pw_shifts_remap_3d(img, shifts_y=-x_shifts, shifts_x=-y_shifts, shifts_z=-z_shifts,
                                              patch_centers=patch_centers, border_nan=self.border_nan,
                                              shifts_interpolate=self.shifts_interpolate)
                     for img, x_shifts, y_shifts, z_shifts in zip(Y, self.x_shifts_els, self.y_shifts_els, self.z_shifts_els)
-                ]
+                )
 
             else:
                 # x_shifts_els and y_shifts_els are switched intentionally
-                m_reg = [
+                m_reg = (
                     apply_pw_shifts_remap_2d(img, shifts_y=-x_shifts, shifts_x=-y_shifts, patch_centers=patch_centers,
                                              border_nan=self.border_nan, shifts_interpolate=self.shifts_interpolate)
                     for img, x_shifts, y_shifts in zip(Y, self.x_shifts_els, self.y_shifts_els)
-                ]
+                )
 
+        t = len(Y)
         del Y
-        m_reg = np.stack(m_reg, axis=0)
         if save_memmap:
-            dims = m_reg.shape
-            fname_tot = caiman.paths.memmap_frames_filename(save_base_name, dims[1:], dims[0], order)
-            fname_tot = caiman.paths.fn_relocated(fname_tot)
-            big_mov = np.memmap(fname_tot, mode='w+', dtype=np.float32,
-                        shape=caiman.mmapping.prepare_shape((np.prod(dims[1:]), dims[0])), order=order)
-            big_mov[:] = np.reshape(m_reg.transpose(1, 2, 0), (np.prod(dims[1:]), dims[0]), order='F')
+            for i, frame in tqdm(enumerate(m_reg), total=t, desc='Applying to full movie...', unit='frame'):
+                if i == 0:
+                    dims = frame.shape
+                    fname_tot = caiman.paths.memmap_frames_filename(save_base_name, dims, t, order)
+                    big_mov = np.memmap(fname_tot, mode='w+', dtype=np.float32,
+                                        shape=caiman.mmapping.prepare_shape((np.prod(dims), t)), order=order)
+                big_mov[:, i] = np.ravel(frame, order='F')
             big_mov.flush()
             del big_mov
             return fname_tot
         else:
-            return caiman.movie(m_reg)
+            return caiman.movie(np.stack(list(m_reg), axis=0))
 
 def apply_shift_iteration(img, shift, border_nan=False, border_type=cv2.BORDER_REFLECT):
     # Used by MotionCorrect.apply_shifts_movie(), tile_and_correct(), and apply_shift_online()
