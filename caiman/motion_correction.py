@@ -528,7 +528,7 @@ class MotionCorrect(object):
         del Y
         #m_reg = np.stack(m_reg, axis=0)
         if save_memmap:
-            for i, frame in enumerate(m_reg):
+            for i, frame in tqdm(enumerate(m_reg), total=t, desc='Applying to full movie...', unit='frame'):
                 if i == 0:
                     dims = frame.shape
                     fname_tot = caiman.paths.memmap_frames_filename(save_base_name, dims, t, order)
