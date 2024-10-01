@@ -197,8 +197,9 @@ def broadcast_chain_subindices(maybe_subindices: Optional[ChainSubindices], n_fi
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
-                     odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False,
-                     interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> list[int]:
+                     odd_row_ndead: Union[Optional[int], Sequence[Optional[int]]] = None, odd_row_offset: Union[Optional[int], Sequence[Optional[int]]] = None,
+                     force_estim_ndead_offset: bool = False, interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None
+                     ) -> list[int]:
     """
     Concatenate a list of sbx files into one tif file.
     Args:
@@ -226,22 +227,32 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     basenames, exts = zip(*[os.path.splitext(file) for file in filenames])
     filenames = [bn if ext == '.sbx' else fn for fn, bn, ext in zip(filenames, basenames, exts)]
 
-    odd_row_ndeads = [odd_row_ndead] * len(filenames)
-    odd_row_offsets = [odd_row_offset] * len(filenames)
+    if not isinstance(odd_row_ndead, list):
+        if isinstance(odd_row_ndead, Sequence):
+            odd_row_ndead = list(odd_row_ndead)
+        else:
+            odd_row_ndead = [odd_row_ndead] * len(filenames)
+    
+    if not isinstance(odd_row_offset, list):
+        if isinstance(odd_row_offset, Sequence):
+            odd_row_offset = list(odd_row_offset)
+        else:
+            odd_row_offset = [odd_row_offset] * len(filenames)
+
     if not force_estim_ndead_offset:
         # change None to 0 for unidirectional scans
-        for i, (file, ndead, offset) in enumerate(zip(filenames, odd_row_ndeads, odd_row_offsets)):
+        for i, (file, ndead, offset) in enumerate(zip(filenames, odd_row_ndead, odd_row_offset)):
             info = loadmat_sbx(file + '.mat')
             bidi = 'scanmode' in info and info['scanmode'] == 0
             if not bidi:
                 if ndead is None:
-                    odd_row_ndeads[i] = 0
+                    odd_row_ndead[i] = 0
                 if offset is None:
-                    odd_row_offsets[i] = 0
+                    odd_row_offset[i] = 0
 
     might_do_correction = (
-        any(ndead != 0 for ndead in odd_row_ndeads) or
-        any(offset != 0 for offset in odd_row_offsets))
+        any(ndead != 0 for ndead in odd_row_ndead) or
+        any(offset != 0 for offset in odd_row_offset))
     if to32 is None:
         # if we will be adding nans to the final image, must convert to float32
         to32 = dead_pix_mode == True and might_do_correction
@@ -298,7 +309,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     out_memmap_args = [(fileout, tif_dtype, 'r+', offset, shape, 'C') for offset, shape in zip(byte_offsets, shapes)]
 
     args = ((out_args, filename, subind, channel, plane, False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
-            for out_args, filename, subind, this_ndead, this_offset in zip(out_memmap_args, filenames, subindices, odd_row_ndeads, odd_row_offsets))
+            for out_args, filename, subind, this_ndead, this_offset in zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset))
     
     pbar = trange(len(filenames), desc='Converting each file...', unit='file')
     if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
