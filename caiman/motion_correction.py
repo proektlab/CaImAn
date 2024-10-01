@@ -437,16 +437,16 @@ class MotionCorrect(object):
         
         if self.pw_rigid is False:
             if self.is3D:
-                m_reg = [apply_shifts_dft(img, (sh[0], sh[1], sh[2]), 0,
+                m_reg = (apply_shifts_dft(img, (sh[0], sh[1], sh[2]), 0,
                                           is_freq=False, border_nan=self.border_nan)
-                         for img, sh in zip(Y, self.shifts_rig)]
+                         for img, sh in zip(Y, self.shifts_rig))
             elif self.shifts_opencv:
-                m_reg = [apply_shift_iteration(img, shift, border_nan=self.border_nan)
-                         for img, shift in zip(Y, self.shifts_rig)]
+                m_reg = (apply_shift_iteration(img, shift, border_nan=self.border_nan)
+                         for img, shift in zip(Y, self.shifts_rig))
             else:
-                m_reg = [apply_shifts_dft(img, (
+                m_reg = (apply_shifts_dft(img, (
                     sh[0], sh[1]), 0, is_freq=False, border_nan=self.border_nan) for img, sh in zip(
-                    Y, self.shifts_rig)]
+                    Y, self.shifts_rig))
         else:
             if self.is3D:
                 xyz_grid = [(it[0], it[1], it[2]) for it in sliding_window_3d(
@@ -464,29 +464,29 @@ class MotionCorrect(object):
                     np.arange(0., dims[2]).astype(np.float32))
                 if self.border_nan is not False:
                     if self.border_nan is True:
-                        m_reg = [warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
+                        m_reg = (warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
                                                         resize_sk(shiftY.astype(np.float32), dims) + x_grid,
                                                         resize_sk(shiftZ.astype(np.float32), dims) + z_grid), axis=0),
                                          order=3, mode='constant', cval=np.nan)
-                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z)]
+                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z))
                     elif self.border_nan == 'min':
-                        m_reg = [warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
+                        m_reg = (warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
                                                         resize_sk(shiftY.astype(np.float32), dims) + x_grid,
                                                         resize_sk(shiftZ.astype(np.float32), dims) + z_grid), axis=0),
                                          order=3, mode='constant', cval=np.min(img))
-                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z)]
+                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z))
                     elif self.border_nan == 'copy':
-                        m_reg = [warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
+                        m_reg = (warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
                                                         resize_sk(shiftY.astype(np.float32), dims) + x_grid,
                                                         resize_sk(shiftZ.astype(np.float32), dims) + z_grid), axis=0),
                                          order=3, mode='edge')
-                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z)]
+                                 for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z))
                 else:
-                    m_reg = [warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
+                    m_reg = (warp_sk(img, np.stack((resize_sk(shiftX.astype(np.float32), dims) + y_grid,
                                      resize_sk(shiftY.astype(np.float32), dims) + x_grid,
                                      resize_sk(shiftZ.astype(np.float32), dims) + z_grid), axis=0),
                                      order=3, mode='constant')
-                             for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z)]
+                             for img, shiftX, shiftY, shiftZ in zip(Y, shifts_x, shifts_y, shifts_z))
                                      # borderValue=add_to_movie)                                 # borderValue=add_to_movie)
             else:
                 xy_grid = [(it[0], it[1]) for it in sliding_window(Y[0], self.overlaps, self.strides)]
@@ -501,42 +501,45 @@ class MotionCorrect(object):
                     np.float32), np.arange(0., dims[0]).astype(np.float32))
                 if self.border_nan is not False:
                     if self.border_nan is True:
-                        m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
+                        m_reg = (cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
                                            -cv2.resize(shiftX, dims[::-1]) + y_grid,
                                            cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
                                            borderValue=np.nan)
-                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y)]
+                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y))
 
                     elif self.border_nan == 'min':
-                        m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
+                        m_reg = (cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
                                            -cv2.resize(shiftX, dims[::-1]) + y_grid,
                                            cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
                                            borderValue=np.min(img))
-                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y)]
+                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y))
                     elif self.border_nan == 'copy':
-                        m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
+                        m_reg = (cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
                                            -cv2.resize(shiftX, dims[::-1]) + y_grid,
                                            cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y)]
+                                 for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y))
                 else:
-                    m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
+                    m_reg = (cv2.remap(img, -cv2.resize(shiftY, dims[::-1]) + x_grid,
                                        -cv2.resize(shiftX, dims[::-1]) + y_grid,
                                        cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
                                        borderValue=0.0)
-                             for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y)]
+                             for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y))
+        t = len(Y)
         del Y
-        m_reg = np.stack(m_reg, axis=0)
+        #m_reg = np.stack(m_reg, axis=0)
         if save_memmap:
-            dims = m_reg.shape
-            fname_tot = caiman.paths.memmap_frames_filename(save_base_name, dims[1:], dims[0], order)
-            big_mov = np.memmap(fname_tot, mode='w+', dtype=np.float32,
-                        shape=caiman.mmapping.prepare_shape((np.prod(dims[1:]), dims[0])), order=order)
-            big_mov[:] = np.reshape(m_reg.transpose(1, 2, 0), (np.prod(dims[1:]), dims[0]), order='F')
+            for i, frame in enumerate(m_reg):
+                if i == 0:
+                    dims = frame.shape
+                    fname_tot = caiman.paths.memmap_frames_filename(save_base_name, dims, t, order)
+                    big_mov = np.memmap(fname_tot, mode='w+', dtype=np.float32,
+                                        shape=caiman.mmapping.prepare_shape((np.prod(dims), t)), order=order)
+                big_mov[:, i] = np.ravel(frame, order='F')
             big_mov.flush()
             del big_mov
             return fname_tot
         else:
-            return caiman.movie(m_reg)
+            return caiman.movie(np.stack(list(m_reg), axis=0))
 
 def apply_shift_iteration(img, shift, border_nan:bool=False, border_type=cv2.BORDER_REFLECT):
     # todo todocument
