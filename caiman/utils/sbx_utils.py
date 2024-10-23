@@ -61,7 +61,7 @@ def _todict(matobj) -> dict:
 
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
             plane: Optional[int] = None, to32: Optional[bool] = None, odd_row_ndead: Optional[int] = None,
-            odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False, interp: bool = True,
+            odd_row_offset: Optional[int] = 0, force_estim_ndead_offset: bool = False, interp: bool = True,
             dead_pix_mode: Union[str, bool] = 'copy', dview=None, quiet=False) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array
@@ -120,7 +120,7 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
                bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
-               odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = None, force_estim_ndead_offset: bool = False,
+               odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = 0, force_estim_ndead_offset: bool = False,
                interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
     """
     Convert a single .sbx file to .tif format
@@ -197,7 +197,7 @@ def broadcast_chain_subindices(maybe_subindices: Optional[ChainSubindices], n_fi
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
-                     odd_row_ndead: Union[Optional[int], Sequence[Optional[int]]] = None, odd_row_offset: Union[Optional[int], Sequence[Optional[int]]] = None,
+                     odd_row_ndead: Union[Optional[int], Sequence[Optional[int]]] = None, odd_row_offset: Union[Optional[int], Sequence[Optional[int]]] = 0,
                      force_estim_ndead_offset: bool = False, interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None
                      ) -> list[int]:
     """
