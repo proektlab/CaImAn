@@ -23,11 +23,13 @@ from scipy.ndimage import (
     median_filter
 )
 import shutil
-from sklearn.decomposition import NMF
+from sklearn.decomposition import NMF, MiniBatchNMF
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 import tempfile
 import time
+from typing import Union, Optional, Sequence
+from tqdm import trange
 
 import caiman.mmapping
 import caiman.utils.stats
@@ -969,6 +971,49 @@ def construct_dilate_parallel(pars):
     # search indexes for each component
     return dist_indicator_i
 
+def estimate_bg_batched_nmf(Y, not_px, nb) -> np.ndarray:
+    """Estimate background components using batched NMF to avoid running out of memory"""
+    nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1)
+    nmf_params = nmf.get_params()
+    pix_inds = np.flatnonzero(not_px)
+    rng = np.random.default_rng()
+    last_err = np.inf
+    last_params = dict()
+    last_comps = None
+    n_no_improve = 0
+    for k_batch in trange(nmf_params['max_iter'], unit='batch'):
+        sqerr_accum = 0
+        pix_shuffled = rng.permuted(pix_inds)
+        for offset in range(0, len(pix_shuffled), nmf_params['batch_size']):
+            pix_batch = pix_shuffled[offset:offset+nmf_params['batch_size']]
+            X = np.maximum(Y[pix_batch, :], 0)
+            nmf.partial_fit(X)
+            W_batch = nmf.transform(X)
+            sqerr_accum += np.sum((X - W_batch @ nmf.components_) ** 2)
+        err = np.sqrt(sqerr_accum)
+        # check for early stopping due to no improvement
+        if err >= last_err:
+            # revert to before this batch
+            nmf.set_params(**last_params)
+            n_no_improve += 1
+            if n_no_improve >= nmf_params['max_no_improvement']:
+                logging.info(f'Stopping after {k_batch + 1} epochs due to no improvement')
+                break
+        else:
+            n_no_improve = 0
+            
+            # check for early stopping due to change in H
+            if last_comps is not None:
+                comps_change = np.linalg.norm(nmf.components_ - last_comps)
+                if comps_change < nmf_params['tol']:
+                    logging.info(f'Stopping after {k_batch + 1} epochs due to change < tolerance ({nmf_params["tol"]})')
+                    break
+        last_comps = nmf.components_
+        last_params = nmf.get_params()
+    else:
+        logging.warning('NMF did not converge')
+    return nmf.components_
+
 def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, dist, expandCore, dview):
     """compute the indices of the distance from the cm to search for the spatial component (calling determine_search_location)
 
@@ -1043,13 +1088,24 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
             px = (np.sum(dist_indicator, axis=1) > 0)
             not_px = ~px
 
+            n_bytes = np.sum(not_px) * Y.shape[1] * 4
+            n_bytes_avail = psutil.virtual_memory().available
+            in_memory = n_bytes / n_bytes_avail < 0.25
+
             if nb>1:
+                if in_memory:
+                    logging.info('estimating f using NMF')
                     f = NMF(nb, init='nndsvda').fit(np.maximum(Y[not_px, :], 0)).components_
+                else:
+                    # fit NMF in chunks, have to implement manually because we don't want to load
+                    # all of Y[not_pix, :] to feed it 
+                    logging.info('estimating f using minibatch NMF')
+                    f = estimate_bg_batched_nmf(Y, not_px, nb)
             else:
-                if Y.shape[-1] < 30000:
+                if in_memory:
                     f = Y[not_px, :].mean(0)
                 else:
-                    print('estimating f')
+                    logging.info('estimating f')
                     f = 0
                     for xxx in np.where(not_px)[0]:
                         f += Y[xxx]
