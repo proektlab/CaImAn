@@ -971,9 +971,9 @@ def construct_dilate_parallel(pars):
     # search indexes for each component
     return dist_indicator_i
 
-def estimate_bg_batched_nmf(Y, not_px, nb) -> np.ndarray:
+def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
     """Estimate background components using batched NMF to avoid running out of memory"""
-    nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1)
+    nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1, batch_size=batch_size)
     nmf_params = nmf.get_params()
     pix_inds = np.flatnonzero(not_px)
     rng = np.random.default_rng()
@@ -1089,8 +1089,8 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
             not_px = ~px
 
             n_bytes = np.sum(not_px) * Y.shape[1] * 4
-            n_bytes_avail = psutil.virtual_memory().available
-            in_memory = n_bytes / n_bytes_avail < 0.25
+            n_bytes_avail = psutil.virtual_memory().available / 2
+            in_memory = n_bytes > n_bytes_avail
 
             if nb>1:
                 if in_memory:
@@ -1100,7 +1100,8 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
                     # fit NMF in chunks, have to implement manually because we don't want to load
                     # all of Y[not_pix, :] to feed it 
                     logging.info('estimating f using minibatch NMF')
-                    f = estimate_bg_batched_nmf(Y, not_px, nb)
+                    batch_size = int(n_bytes_avail / (Y.shape[1] * 4))
+                    f = estimate_bg_batched_nmf(Y, not_px, nb, batch_size=batch_size)
             else:
                 if in_memory:
                     f = Y[not_px, :].mean(0)
