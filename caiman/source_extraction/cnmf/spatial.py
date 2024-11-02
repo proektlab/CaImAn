@@ -975,18 +975,18 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
     """Estimate background components using batched NMF to avoid running out of memory"""
     nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1, batch_size=batch_size)
     nmf_params = nmf.get_params()
-    pix_inds = np.flatnonzero(not_px)
     rng = np.random.default_rng()
     last_err = np.inf
     last_params = dict()
     last_comps = None
     n_no_improve = 0
-    for k_batch in trange(nmf_params['max_iter'], unit='batch'):
+    batch_slices = [slice(offset, offset + nmf_params['batch_size'])
+                    for offset in range(0, Y.shape[0], nmf_params['batch_size'])]
+    for k_epoch in trange(nmf_params['max_iter'], unit='batch'):
         sqerr_accum = 0
-        pix_shuffled = rng.permuted(pix_inds)
-        for offset in range(0, len(pix_shuffled), nmf_params['batch_size']):
-            pix_batch = pix_shuffled[offset:offset+nmf_params['batch_size']]
-            X = np.maximum(Y[pix_batch, :], 0)
+        for batch_slice in rng.permuted(batch_slices):
+            Y_batch = Y[batch_slice, :][not_px[batch_slice]]
+            X = np.maximum(Y_batch, 0)
             nmf.partial_fit(X)
             W_batch = nmf.transform(X)
             sqerr_accum += np.sum((X - W_batch @ nmf.components_) ** 2)
@@ -997,7 +997,7 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
             nmf.set_params(**last_params)
             n_no_improve += 1
             if n_no_improve >= nmf_params['max_no_improvement']:
-                logging.info(f'Stopping after {k_batch + 1} epochs due to no improvement')
+                logging.info(f'Stopping after {k_epoch + 1} epochs due to no improvement')
                 break
         else:
             n_no_improve = 0
@@ -1006,7 +1006,7 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
             if last_comps is not None:
                 comps_change = np.linalg.norm(nmf.components_ - last_comps)
                 if comps_change < nmf_params['tol']:
-                    logging.info(f'Stopping after {k_batch + 1} epochs due to change < tolerance ({nmf_params["tol"]})')
+                    logging.info(f'Stopping after {k_epoch + 1} epochs due to change < tolerance ({nmf_params["tol"]})')
                     break
         last_comps = nmf.components_
         last_params = nmf.get_params()
@@ -1089,8 +1089,8 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
             not_px = ~px
 
             n_bytes = np.sum(not_px) * Y.shape[1] * 4
-            n_bytes_avail = psutil.virtual_memory().available / 2
-            in_memory = n_bytes > n_bytes_avail
+            n_bytes_avail = psutil.virtual_memory().available / 4
+            in_memory = n_bytes < n_bytes_avail
 
             if nb>1:
                 if in_memory:
