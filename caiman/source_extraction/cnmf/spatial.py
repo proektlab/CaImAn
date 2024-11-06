@@ -973,7 +973,7 @@ def construct_dilate_parallel(pars):
 
 def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
     """Estimate background components using batched NMF to avoid running out of memory"""
-    nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1, batch_size=batch_size)
+    nmf = MiniBatchNMF(nb, init='nndsvda', forget_factor=1, batch_size=batch_size, max_iter=1)
     nmf_params = nmf.get_params()
     rng = np.random.default_rng()
     last_err = np.inf
