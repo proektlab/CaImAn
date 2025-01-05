@@ -313,14 +313,14 @@ def register_ROIs(A1,
                   D=None,
                   max_thr=0,
                   use_opt_flow=True,
-                  align_options: Optional[dict] = None,
                   thresh_cost=.7,
                   max_dist=10,
                   enclosed_thr=None,
                   print_assignment=False,
                   plot_results=False,
                   Cn=None,
-                  cmap='viridis'):
+                  cmap='viridis',
+                  align_options: Optional[dict] = None):
     """
     Register ROIs across different sessions using an intersection over union 
     metric and the Hungarian algorithm for optimal matching
@@ -353,9 +353,6 @@ def register_ROIs(A1,
         use_opt_flow: bool
             use dense optical flow to align templates
 
-        align_options: Optional[dict]
-            mcorr options to override defaults when align_flag is True and use_opt_flow is False
-
         thresh_cost: scalar
             maximum distance considered
 
@@ -377,6 +374,9 @@ def register_ROIs(A1,
 
         cmap: string
             colormap for background image
+        
+        align_options: Optional[dict]
+            mcorr options to override defaults when align_flag is True and use_opt_flow is False
 
     Returns:
         matched_ROIs1: list
