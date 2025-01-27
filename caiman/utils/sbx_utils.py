@@ -321,8 +321,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             tif_memmap = np.memmap(fileout, tif_dtype, 'r+', tif_data_offset, save_shape, 'C')
             args_not_inplace = ((None,) + a[1:] for a in args)
             for res, out_slice, _ in zip(dview.map_async(_sbxread_worker, args_not_inplace), frame_slices, pbar):
-                # wait for each AsyncResult
-                tif_memmap[out_slice] = res.get()
+                tif_memmap[out_slice] = res
             tif_memmap.flush()
             del tif_memmap  # important to make sure file is closed (on Windows)
     else:
@@ -683,8 +682,6 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             logging.info('Converting movie...')
 
     for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
-        if isinstance(chunk, AsyncResult):
-            chunk = chunk.get()
         if not inplace:
             out_arr[chunk_slice] = chunk
     if isinstance(chunks, tqdm):
