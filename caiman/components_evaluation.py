@@ -331,6 +331,41 @@ def evaluate_components_CNN(A,
 
     return predictions, final_crops
 
+def estimate_baseline(traces: np.ndarray, T: int, slow_baseline=False) -> np.ndarray:
+    """
+    Estimates baseline that can be removed in evaluate_components.
+    Return value: baseline that should be subtracted from traes.
+    """
+    logger = logging.getLogger("caiman")
+
+    num_samps_bl = np.minimum(np.shape(traces)[-1]// 5, 800)
+    if slow_baseline:
+        return scipy.ndimage.percentile_filter(traces, 8, size=[1, num_samps_bl])
+
+    else:  # fast baseline removal
+        downsampfact = num_samps_bl
+        elm_missing = int(np.ceil(T * 1.0 / downsampfact) * downsampfact - T)
+        padbefore = int(np.floor(elm_missing / 2.))
+        padafter = int(np.ceil(elm_missing / 2.))
+        tr_tmp = np.pad(traces.T, ((padbefore, padafter), (0, 0)), mode='reflect')
+        numFramesNew, num_traces = np.shape(tr_tmp)
+        # compute baseline quickly
+        logger.debug("binning data ...")
+        tr_BL = np.reshape(tr_tmp, (downsampfact, numFramesNew // downsampfact, num_traces), order='F')
+        tr_BL = np.percentile(tr_BL, 8, axis=0)
+        logger.debug("interpolating data ...")
+        logger.debug(tr_BL.shape)
+        tr_BL = scipy.ndimage.zoom(np.array(tr_BL, dtype=np.float32), [downsampfact, 1],
+                                    order=3,
+                                    mode='constant',
+                                    cval=0.0,
+                                    prefilter=True)
+        if padafter == 0:
+            return tr_BL.T
+        else:
+            return tr_BL[padbefore:-padafter].T
+
+
 def evaluate_components(Y: np.ndarray,
                         traces: np.ndarray,
                         A,
@@ -425,38 +460,9 @@ def evaluate_components(Y: np.ndarray,
                                                                    N=N,
                                                                    sigma_factor=sigma_factor)
 
-    logger.debug('Removing Baseline')
     if remove_baseline:
-        num_samps_bl = np.minimum(np.shape(traces)[-1]// 5, 800)
-        slow_baseline = False
-        if slow_baseline:
-
-            traces = traces - \
-                scipy.ndimage.percentile_filter(
-                    traces, 8, size=[1, num_samps_bl])
-
-        else:                                                                                # fast baseline removal
-            downsampfact = num_samps_bl
-            elm_missing = int(np.ceil(T * 1.0 / downsampfact) * downsampfact - T)
-            padbefore = int(np.floor(elm_missing / 2.))
-            padafter = int(np.ceil(elm_missing / 2.))
-            tr_tmp = np.pad(traces.T, ((padbefore, padafter), (0, 0)), mode='reflect')
-            numFramesNew, num_traces = np.shape(tr_tmp)
-                                                                                             # compute baseline quickly
-            logger.debug("binning data ...")
-            tr_BL = np.reshape(tr_tmp, (downsampfact, numFramesNew // downsampfact, num_traces), order='F')
-            tr_BL = np.percentile(tr_BL, 8, axis=0)
-            logger.debug("interpolating data ...")
-            logger.debug(tr_BL.shape)
-            tr_BL = scipy.ndimage.zoom(np.array(tr_BL, dtype=np.float32), [downsampfact, 1],
-                                       order=3,
-                                       mode='constant',
-                                       cval=0.0,
-                                       prefilter=True)
-            if padafter == 0:
-                traces -= tr_BL.T
-            else:
-                traces -= tr_BL[padbefore:-padafter].T
+        logger.debug('Removing Baseline')
+        traces -= estimate_baseline(traces, T, slow_baseline=False)
 
     logger.debug('Computing event exceptionality')
     fitness_raw, erfc_raw, _, _ = compute_event_exceptionality(traces,
