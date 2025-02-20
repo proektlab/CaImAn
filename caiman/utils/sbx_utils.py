@@ -290,40 +290,29 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     if extension not in ['.tif', '.tiff', '.btf']:
         fileout = fileout + '.tif'
 
+    # Make the output file and prepare for parallel processing
     dtype = np.dtype(np.float32 if to32 else np.uint16)
-    # Make the file first so we can pass in bigtiff and imagej options; otherwise could create using tifffile.memmap directly
-    res = tifffile.imwrite(fileout, data=None, shape=save_shape, returnoffset=True, bigtiff=bigtiff, imagej=imagej,
-                           dtype=dtype, photometric='MINISBLACK', byteorder='<', align=tifffile.TIFF.ALLOCATIONGRANULARITY)
-    if res is None:
-        raise RuntimeError('Tiff file is not memmappable')
-    tif_data_offset, _ = res 
-    tif_dtype = '<' + dtype.char
-
-    # Now convert each file
-    # set up for parallel processing
-    offsets = np.insert(np.cumsum(all_n_frames_out), 0, 0)  # frame offset for each file
-    frame_slices = [slice(offset0, offset1) for offset0, offset1 in zip(offsets[:-1], offsets[1:])]
-    byte_offsets = tif_data_offset + np.prod(save_shape[1:]) * dtype.itemsize * np.array(offsets[:-1])
-    shapes = [(d,) + save_shape[1:] for d in np.diff(offsets)]
-    # gather arguments to contsruct memmaps directly in each worker rather than using tiffile.memmap to avoid overhead
-    out_memmap_args = [(fileout, tif_dtype, 'r+', offset, shape, 'C') for offset, shape in zip(byte_offsets, shapes)]
+    frame_slices, out_memmap_args = _prepare_concat_output_memmap(fileout, save_shape, all_n_frames_out, dtype=dtype,
+                                                                  bigtiff=bigtiff, imagej=imagej)
 
     args = ((out_args, filename, subind, channel, plane, False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
             for out_args, filename, subind, this_ndead, this_offset in zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset))
     
     pbar = trange(len(filenames), desc='Converting each file...', unit='file')
     if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
-        if 'multiprocessing' in str(type(dview)):
-            for res, _ in zip(dview.imap_unordered(_sbxread_worker, args), pbar):
-                pass
-        else:
+        if 'DirectView' in str(type(dview)):
             # ipyparallel, could be across computers so don't do in place
+            tif_dtype = out_memmap_args[0]['dtype']
+            tif_data_offset = out_memmap_args[0]['offset']
             tif_memmap = np.memmap(fileout, tif_dtype, 'r+', tif_data_offset, save_shape, 'C')
             args_not_inplace = ((None,) + a[1:] for a in args)
             for res, out_slice, _ in zip(dview.map_async(_sbxread_worker, args_not_inplace), frame_slices, pbar):
                 tif_memmap[out_slice] = res
             tif_memmap.flush()
             del tif_memmap  # important to make sure file is closed (on Windows)
+        else:
+            for res, _ in zip(dview.map_sync(_sbxread_worker, args), pbar):
+                pass
     else:
         for arglist, _ in zip(args, pbar):
             _sbxread_worker(arglist, dview)
@@ -489,6 +478,44 @@ def get_odd_row_ndead(filename: str) -> int:
     sbx_mmap = np.transpose(sbx_mmap, (0, 4, 2, 1, 3))  # to (chans, frames, Y, X, Z)
     odd_row_ndead = _estimate_odd_row_nsaturated(sbx_mmap[0, 0])
     return odd_row_ndead
+
+
+def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], frames_per_section: list[int], dtype,
+                                  bigtiff: Optional[bool] = True, imagej=False) -> tuple[list[slice], list[dict]]:
+    """
+    Write an empty output tif file with the given full_shape. frames_per_section specifies how many frames are from each subsection
+    of the file (for example, different trials that are being concatenated)
+
+    Returns:
+    - a list of slices for the 1st dimension of the output file for each subsection
+    - a list of dicts of np.memmap arguments to use to memmap each subsection of the file
+    """
+    if sum(frames_per_section) != full_shape[0]:
+        raise ValueError('Frames per section is not a valid division of the total frames')
+
+    # write the file
+    res = tifffile.imwrite(filename, data=None, shape=full_shape, returnoffset=True, bigtiff=bigtiff, imagej=imagej,
+                           dtype=dtype, photometric='MINISBLACK', byteorder='<', align=tifffile.TIFF.ALLOCATIONGRANULARITY)
+    if res is None:
+        raise RuntimeError('Tiff file is not memmappable')
+    tif_data_offset, _ = res 
+    tif_dtype = '<' + dtype.char
+
+    # make arguments for each sub-section
+    offsets = np.insert(np.cumsum(frames_per_section), 0, 0)  # frame offset for each file
+    frame_slices = [slice(offset0, offset1) for offset0, offset1 in zip(offsets[:-1], offsets[1:])]
+    byte_offsets = [int(tif_data_offset + np.prod(full_shape[1:]) * dtype.itemsize * offset)
+                    for offset in np.array(offsets[:-1])]
+    shapes = [(int(d),) + full_shape[1:] for d in np.diff(offsets)]
+    out_memmap_args = [{
+        'filename': filename,
+        'dtype': tif_dtype,
+        'mode': 'r+',
+        'offset': offset,
+        'shape': shape,
+        'order': 'C'}
+        for offset, shape in zip(byte_offsets, shapes)]
+    return frame_slices, out_memmap_args
 
 
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
@@ -701,7 +728,7 @@ def _sbxread_worker(args, dview=None) -> np.ndarray:
     """For calling _sbxread_helper in parallel"""
     out_mmap_args, file_in, subindices, channel, plane, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
     if out_mmap_args is not None:
-        out = np.memmap(*out_mmap_args)
+        out = np.memmap(**out_mmap_args)
     else:
         out = None
     res = _sbxread_helper(filename=file_in, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
