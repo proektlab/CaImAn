@@ -311,7 +311,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             tif_memmap.flush()
             del tif_memmap  # important to make sure file is closed (on Windows)
         else:
-            for res, _ in zip(dview.map_sync(_sbxread_worker, args), pbar):
+            for res, _ in zip(dview.map(_sbxread_worker, args), pbar):
                 pass
     else:
         for arglist, _ in zip(args, pbar):
