@@ -37,6 +37,7 @@ dependencies = [
   "scipy",
   "tensorflow",
   "tifffile",
+  "trycast",
   "tqdm",
   "yapf",
   "zarr"
