@@ -149,10 +149,10 @@ def save_memmap_each(fnames: list[str],
 
     # Perform the job using whatever computing framework we're set to use
     if dview is not None:
-        if 'multiprocessing' in str(type(dview)):
-            fnames_new = dview.map_async(save_place_holder, pars).get(4294967)
-        else:
+        if 'ipyparallel' in str(type(dview)):
             fnames_new = my_map(dview, save_place_holder, pars)
+        else:
+            fnames_new = dview.map_async(save_place_holder, pars).get(4294967)
     else:
         fnames_new = list(map(save_place_holder, pars))
 
@@ -215,10 +215,10 @@ def save_memmap_join(mmap_fnames:list[str], base_name: str = None, n_chunks: int
         pars[-1][-4] = d
 
     if dview is not None:
-        if 'multiprocessing' in str(type(dview)):
-            dview.map_async(save_portion, pars).get(4294967)
-        else:
+        if 'ipyparallel' in str(type(dview)):
             my_map(dview, save_portion, pars)
+        else:
+            dview.map_async(save_portion, pars).get(4294967)
 
     else:
         list(map(save_portion, pars))
