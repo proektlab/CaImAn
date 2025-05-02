@@ -1275,39 +1275,23 @@ def load(file_name: Union[str, list[str]],
                     logger.warning('Your tif file is saved a single page' +
                                    'file. Performance will be affected')
                     multi_page = False
-                if subindices is not None:
-                    # if isinstance(subindices, (list, tuple)): # is list or tuple:
-                    if isinstance(subindices, list):  # is list or tuple:
-                        if multi_page:
-                            if len(tffl.series[0].shape) < 4:
-                                input_arr = tffl.asarray(key=subindices[0])[:, subindices[1], subindices[2]]
-                            else:  # 3D
-                                shape = tffl.series[0].shape
-                                ts = np.arange(shape[0])[subindices[0]]
-                                input_arr = tffl.asarray(key=np.ravel(ts[:, None] * shape[1] +
-                                                                      np.arange(shape[1]))
-                                                         ).reshape((len(ts),) + shape[1:])[
-                                    :, subindices[1], subindices[2], subindices[3]]
-                        else:
-                            input_arr = tffl.asarray()[tuple(subindices)]
 
-                    else:
-                        if multi_page:
-                            if len(tffl.series[0].shape) < 4:
-                                input_arr = tffl.asarray(key=subindices)
-                            else:  # 3D
-                                shape = tffl.series[0].shape
-                                ts = np.arange(shape[0])[subindices]
-                                input_arr = tffl.asarray(key=np.ravel(ts[:, None] * shape[1] +
-                                                                      np.arange(shape[1]))
-                                                         ).reshape((len(ts),) + shape[1:])
-                        else:
-                            input_arr = tffl.asarray(out='memmap')
-                            input_arr = input_arr[subindices]
-
+                if subindices is None:
+                    input_arr = tffl.asarray(out=None if in_memory else 'memmap')
                 else:
-                    input_arr = tffl.asarray()
+                    if not isinstance(subindices, (list, tuple)):
+                        subindices = (subindices,)
 
+                    input_arr = tffl.asarray(out='memmap')
+                    tffl_shape = tffl.series[0].shape
+                    if multi_page and len(tffl_shape) >= 4:
+                        # reshape to reflect 3D structure
+                        input_arr = input_arr.reshape(tffl_shape)
+
+                    input_arr = input_arr[tuple(subindices)]
+
+                    if in_memory:
+                        input_arr = np.asarray(input_arr)
                 input_arr = np.squeeze(input_arr)
 
         elif extension in ('.avi', '.mkv'):      # load video file
