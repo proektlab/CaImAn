@@ -296,14 +296,14 @@ def save_portion(pars) -> int:
         del Yr
 
     # determine which pixels to set to min_mov, if any
-    if border_to_0 == 0:
+    if border_to_0 > 0:
         inds = np.arange(idx_start, idx_end, dtype=int)
         ny, nx = dims[:2]
         if len(dims) > 2:
             # planes are irrelevant
             inds %= dims[2]
-        inds_x = inds % nx
-        inds_y = inds // nx
+        inds_y = inds % ny
+        inds_x = inds // ny
         Yr_tot[(inds_x < border_to_0) | (inds_x >= nx - border_to_0), :] = min_mov
         Yr_tot[(inds_y < border_to_0) | (inds_y >= ny - border_to_0), :] = min_mov
 
