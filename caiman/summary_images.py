@@ -207,7 +207,8 @@ def local_correlations(Y, eight_neighbours: bool = True, swap_dim: bool = True, 
         Y = np.transpose(Y, tuple(np.hstack((Y.ndim - 1, list(range(Y.ndim))[:-1]))))
 
     rho = np.zeros(np.shape(Y)[1:])
-    w_mov = (Y - np.mean(Y, axis=0)) / np.std(Y, axis=0)
+    with np.errstate(invalid='ignore'):
+        w_mov = (Y - np.mean(Y, axis=0)) / np.std(Y, axis=0)
 
     rho_h = np.mean(np.multiply(w_mov[:, :-1, :], w_mov[:, 1:, :]), axis=0)
     rho_w = np.mean(np.multiply(w_mov[:, :, :-1], w_mov[:, :, 1:]), axis=0)

@@ -3,7 +3,7 @@
 """
 Merging of spatially overlapping components that are temporally correlated
 """
-
+from typing import Optional
 import logging
 import numpy as np
 import scipy
@@ -14,6 +14,61 @@ from caiman.source_extraction.cnmf.spatial import update_spatial_components, thr
 from caiman.source_extraction.cnmf.temporal import update_temporal_components
 from caiman.source_extraction.cnmf.utilities import update_order_greedy
 
+
+def get_ROIs_to_merge(A: csc_matrix, C: np.ndarray, thr=0.85) -> tuple[list[np.ndarray], np.ndarray]:
+    """
+    Find which ROIs to merge, according to a given threshold.
+    Returns the list of ROI indices, sorted by correlation (descending), with no limit on number of merges.
+    Second output is the total correlations between C vectors for ROIs in each merge set.
+    """
+    # tests and initialization
+    nr = A.shape[1]
+    A = csc_matrix(A)
+
+    # find graph of overlapping spatial components
+    A_corr = scipy.sparse.triu(A.T * A)
+    A_corr.setdiag(0)
+    A_corr = A_corr.tocsc()
+    FF2 = A_corr > 0
+    C_corr = scipy.sparse.lil_matrix(A_corr.shape)
+    for ii in range(nr):
+        overlap_indices = A_corr[ii, :].nonzero()[1]
+        if len(overlap_indices) > 0:
+            # we chesk the correlation of the calcium traces for each overlapping components
+            corr_values = [scipy.stats.pearsonr(C[ii, :], C[jj, :])[
+                0] for jj in overlap_indices]
+            C_corr[ii, overlap_indices] = corr_values
+
+    FF1 = (C_corr + C_corr.T) > thr
+    FF3 = FF1.multiply(FF2)
+
+    nb, connected_comp = csgraph.connected_components(
+        FF3)  # % extract connected components
+
+    list_conxcomp_initial = []
+    for i in range(nb):  # we list them
+        if np.sum(connected_comp == i) > 1:
+            list_conxcomp_initial.append((connected_comp == i).T)
+    list_conxcomp = np.asarray(list_conxcomp_initial).T
+
+    if list_conxcomp.ndim > 1:
+        cor = np.zeros((np.shape(list_conxcomp)[1], 1))
+        for i in range(np.size(cor)):
+            fm = np.where(list_conxcomp[:, i])[0]
+            for j1 in range(np.size(fm)):
+                for j2 in range(j1 + 1, np.size(fm)):
+                    cor[i] = cor[i] + C_corr[fm[j1], fm[j2]]
+        if np.size(cor) > 1:
+            # we get the size (indices)
+            ind = np.argsort(np.squeeze(cor))[::-1]
+        else:
+            ind = [0]
+        merged_ROIs = [np.where(list_conxcomp[:, i])[0] for i in ind]
+        corrs = np.squeeze(cor)[ind]
+    else:
+        merged_ROIs = []
+        corrs = np.array([])
+    return merged_ROIs, corrs
 
 
 def merge_components(Y, A, b, C, R, f, S, sn_pix, temporal_params,
@@ -140,51 +195,14 @@ def merge_components(Y, A, b, C, R, f, S, sn_pix, temporal_params,
         R = np.zeros_like(C)
 
     [d, t] = np.shape(Y)
-
-    # find graph of overlapping spatial components
-    A_corr = scipy.sparse.triu(A.T * A)
-    A_corr.setdiag(0)
-    A_corr = A_corr.tocsc()
-    FF2 = A_corr > 0
-    C_corr = scipy.sparse.lil_matrix(A_corr.shape)
-    for ii in range(nr):
-        overlap_indices = A_corr[ii, :].nonzero()[1]
-        if len(overlap_indices) > 0:
-            # we chesk the correlation of the calcium traces for each overlapping components
-            corr_values = [scipy.stats.pearsonr(C[ii, :], C[jj, :])[
-                0] for jj in overlap_indices]
-            C_corr[ii, overlap_indices] = corr_values
-
-    FF1 = (C_corr + C_corr.T) > thr
-    FF3 = FF1.multiply(FF2)
-
-    nb, connected_comp = csgraph.connected_components(
-        FF3)  # % extract connected components
-
     p = temporal_params['p']
-    list_conxcomp_initial = []
-    for i in range(nb):  # we list them
-        if np.sum(connected_comp == i) > 1:
-            list_conxcomp_initial.append((connected_comp == i).T)
-    list_conxcomp = np.asarray(list_conxcomp_initial).T
 
-    if list_conxcomp.ndim > 1:
-        cor = np.zeros((np.shape(list_conxcomp)[1], 1))
-        for i in range(np.size(cor)):
-            fm = np.where(list_conxcomp[:, i])[0]
-            for j1 in range(np.size(fm)):
-                for j2 in range(j1 + 1, np.size(fm)):
-                    cor[i] = cor[i] + C_corr[fm[j1], fm[j2]]
-        if np.size(cor) > 1:
-            # we get the size (indices)
-            ind = np.argsort(np.squeeze(cor))[::-1]
-        else:
-            ind = [0]
+    merged_ROIs = get_ROIs_to_merge(A, C, thr=thr)[0]
+    nbmrg = min(len(merged_ROIs), mx)   # number of merging operations
+    merged_ROIs = merged_ROIs[:nbmrg]
 
-        nbmrg = min((np.size(ind), mx))   # number of merging operations
-
+    if nbmrg > 0:
         if merge_parallel:
-            merged_ROIs = [np.where(list_conxcomp[:, ind[i]])[0] for i in range(nbmrg)]
             Acsc_mats = [csc_matrix(A[:, merged_ROI]) for merged_ROI in merged_ROIs]
             Ctmp_mats = [C[merged_ROI] + R[merged_ROI] for merged_ROI in merged_ROIs]
             C_to_norms = [np.sqrt(np.ravel(Acsc.power(2).sum(
@@ -220,11 +238,9 @@ def merge_components(Y, A, b, C, R, f, S, sn_pix, temporal_params,
             c1_merged = np.zeros((nbmrg, 1))
             sn_merged = np.zeros((nbmrg, 1))
             g_merged = np.zeros((nbmrg, p))
-            merged_ROIs = []
             for i in range(nbmrg):
-                merged_ROI = np.where(list_conxcomp[:, ind[i]])[0]
+                merged_ROI = merged_ROIs[i]
                 logger.info(f'Merging components {merged_ROI}')
-                merged_ROIs.append(merged_ROI)
                 Acsc = A.tocsc()[:, merged_ROI]
                 Ctmp = np.array(C)[merged_ROI, :] + np.array(R)[merged_ROI, :]
                 C_to_norm = np.sqrt(np.ravel(Acsc.power(2).sum(
