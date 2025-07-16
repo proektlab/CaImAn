@@ -1145,7 +1145,6 @@ class OnACID(object):
                 see options.['online'] for details
 
         """
-        # TODO Remove the return of self
 
         logger = logging.getLogger("caiman")
         self.t_init = -time()
