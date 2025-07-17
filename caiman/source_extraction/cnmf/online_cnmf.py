@@ -25,6 +25,7 @@ from scipy.ndimage import percentile_filter
 from scipy.sparse import coo_matrix, csc_matrix, spdiags, hstack
 from scipy.stats import norm
 from sklearn.decomposition import NMF
+from skimage.morphology import disk
 from sklearn.preprocessing import normalize
 import tensorflow as tf
 from time import time
@@ -47,9 +48,9 @@ from caiman.source_extraction.cnmf.pre_processing import get_noise_fft
 from caiman.source_extraction.cnmf.utilities import (update_order, peak_local_max, decimation_matrix,
                         gaussian_filter, uniform_filter)
 import caiman.summary_images
-from caiman.utils.utils import save_dict_to_hdf5, load_dict_from_hdf5, parmap, load_graph
-from caiman.utils.stats import pd_solve
 from caiman.utils.nn_models import (fit_NL_model, create_LN_model, quantile_loss, rate_scheduler)
+from caiman.utils.stats import pd_solve
+from caiman.utils.utils import save_dict_to_hdf5, load_dict_from_hdf5, parmap, load_graph
 
 try:
     cv2.setNumThreads(0)
@@ -184,7 +185,7 @@ class OnACID(object):
 
         if Yr.shape[-1] != self.params.get('online', 'init_batch'):
             raise Exception(
-                'The movie size used for initialization does not match with the minibatch size')
+                'The movie size used for initialization does not match the minibatch size')
 
         if new_dims is not None:
 
@@ -338,6 +339,7 @@ class OnACID(object):
             self.estimates.rho_buf = RingBuffer(self.estimates.rho_buf, self.params.get('online', 'minibatch_shape'))
             self.estimates.sv = np.sum(self.estimates.rho_buf.get_last_frames(
                 min(self.params.get('online', 'init_batch'), self.params.get('online', 'minibatch_shape')) - 1), 0)
+
         self.estimates.AtA = (self.estimates.Ab.T.dot(self.estimates.Ab)).toarray()
         self.estimates.AtY_buf = self.estimates.Ab.T.dot(self.estimates.Yr_buf.T)
         self.estimates.groups = list(map(list, update_order(self.estimates.Ab)[0]))
@@ -386,7 +388,6 @@ class OnACID(object):
         self.loaded_model = loaded_model
 
         if self.is1p:
-            from skimage.morphology import disk
             radius = int(round(self.params.get('init', 'ring_size_factor') *
                 self.params.get('init', 'gSiz')[0] / float(ssub_B)))
             ring = disk(radius + 1)
@@ -443,7 +444,7 @@ class OnACID(object):
     @profile
     def fit_next(self, t, frame_in, num_iters_hals=3):
         """
-        This method fits the next frame using the CaImAn online algorithm and
+        This method fits the next frame using the online algorithm and
         updates the object. Does NOT perform motion correction, see ``mc_next()``
 
         Args
@@ -1077,6 +1078,7 @@ class OnACID(object):
             templ += B
         else:
             templ = self.estimates.Ab.dot(self.estimates.C_on[:self.M, t-1])
+
         templ = templ.reshape(self.params.get('data', 'dims'), order='F')
         if self.params.get('online', 'normalize'):
             templ *= self.img_norm
@@ -1120,8 +1122,8 @@ class OnACID(object):
 
     def fit_online(self, **kwargs):
         """Implements the caiman online algorithm on the list of files fls. The
-        files are taken in alpha numerical order and are assumed to each have
-        the same number of frames (except the last one that can be shorter).
+        files are read in alphanumerical order and are assumed to each have
+        the same number of frames (except for the last, which can be shorter).
         Caiman online is initialized using the seeded or bare initialization
         methods.
 
@@ -1142,9 +1144,8 @@ class OnACID(object):
                 additional parameters used to modify self.params.online']
                 see options.['online'] for details
 
-        Returns:
-            self (results of caiman online)
         """
+
         logger = logging.getLogger("caiman")
         self.t_init = -time()
         fls = self.params.get('data', 'fnames')
@@ -1184,6 +1185,7 @@ class OnACID(object):
                 self.params.set('ring_CNN', {'path_to_model': path_to_model})
         else:
             model_LN = None
+
         epochs = self.params.get('online', 'epochs')
         self.initialize_online(model_LN=model_LN)
         self.t_init += time()
@@ -1330,13 +1332,12 @@ class OnACID(object):
         self.estimates.C_on = self.estimates.C_on[:self.M]
         self.estimates.noisyC = self.estimates.noisyC[:self.M]
 
-        return self
-
     def create_frame(self, frame_cor, show_residuals=True, resize_fact=3, transpose=True):
         if show_residuals:
             caption = 'Corr*PSNR buffer' if self.params.get('online', 'use_corr_img') else 'Mean Residual Buffer'
         else:
             caption = 'Identified Components'
+
         captions = ['Raw Data', 'Inferred Activity', caption, 'Denoised Data']
         self.dims = self.estimates.dims
         self.captions = captions
@@ -1359,6 +1360,7 @@ class OnACID(object):
                     self.estimates.W.dot(bc2))).reshape(self.dims, order='F')
         else:
             bgkrnd_frame = b.dot(f[:, self.t - 1]).reshape(self.dims, order='F')  # denoised frame (components + background)
+
         denoised_frame = comps_frame + bgkrnd_frame
         denoised_frame = (denoised_frame.copy() - self.bnd_Y[0])/np.diff(self.bnd_Y)
         comps_frame = (comps_frame.copy() - self.bnd_AC[0])/np.diff(self.bnd_AC)
@@ -1376,7 +1378,7 @@ class OnACID(object):
         else:
             all_comps = np.array(A.sum(-1)).reshape(self.dims, order='F')
             fac = 2
-        #all_comps = (all_comps.copy() - self.bnd_Y[0])/np.diff(self.bnd_Y)
+
         all_comps = np.minimum(np.maximum(all_comps, 0)*fac, 1)
                                                   # spatial shapes
         frame_comp_1 = cv2.resize(np.concatenate([frame_plot, all_comps * 1.], axis=-1),
