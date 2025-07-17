@@ -11,6 +11,7 @@ dependencies:
 - ipykernel
 - ipython
 - ipyparallel
+- ipywidgets
 - jupyter
 - jupyter_bokeh
 - matplotlib
