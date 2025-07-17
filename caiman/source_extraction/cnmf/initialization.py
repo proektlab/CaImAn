@@ -14,8 +14,6 @@ import matplotlib.pyplot as plt
 from multiprocessing import current_process
 import numpy as np
 import scipy
-import scipy.ndimage as nd
-from scipy.ndimage import center_of_mass, correlate
 import scipy.sparse as spr
 from skimage.morphology import disk
 from sklearn.decomposition import NMF, FastICA
@@ -295,7 +293,7 @@ def initialize_components(Y, K=30, gSig=[5, 5], gSiz=None, ssub=1, tsub=1, nIter
     if gSiz is None:
         gSiz = 2 * (np.asarray(gSig) + .5).astype(int) + 1
 
-    d, T = np.shape(Y)[:-1], np.shape(Y)[-1]
+    d, T = Y.shape[:-1], Y.shape[-1]
     # rescale according to downsampling factor
     gSig = np.asarray(gSig, dtype=float) / ssub
     gSiz = np.round(np.asarray(gSiz) / ssub).astype(int)
@@ -373,7 +371,7 @@ def initialize_components(Y, K=30, gSig=[5, 5], gSiz=None, ssub=1, tsub=1, nIter
     else:
         raise Exception(f"Unsupported initialization method {method}")
 
-    K = np.shape(Ain)[-1]
+    K = Ain.shape[-1]
 
     if Ain.size > 0 and not center_psf and ssub != 1:
 
@@ -409,7 +407,7 @@ def initialize_components(Y, K=30, gSig=[5, 5], gSiz=None, ssub=1, tsub=1, nIter
     if Ain.size > 0:
         Cin = resize(Cin, [K, T])
         center = np.asarray(
-            [center_of_mass(a.reshape(d, order='F')) for a in Ain.T])
+            [scipy.ndimage.center_of_mass(a.reshape(d, order='F')) for a in Ain.T])
     else:
         Cin = np.empty((K, T), dtype=np.float32)
         center = []
@@ -456,7 +454,7 @@ def ICA_PCA(Y_ds, nr, sigma_smooth=(.5, .5, .5), truncate=2, fun='logcosh',
         m1 = m
     pca_comp = nr
 
-    T, d1, d2 = np.shape(m1)
+    T, d1, d2 = m1.shape
     d = d1 * d2
     yr = np.reshape(m1, [T, d], order='F')
 
@@ -766,7 +764,7 @@ def greedyROI(Y, nr=30, gSig=[5, 5], gSiz=[11, 11], nIter=5, kernel=None, nb=1,
     """
     logger = logging.getLogger("caiman")
     logger.info(f"Greedy initialization of spatial and temporal components using spatial Gaussian filtering. Params={nmf_overrides}")
-    d = np.shape(Y)
+    d = Y.shape
     Y[np.isnan(Y)] = 0
     med = np.median(Y, axis=-1)
     Y = Y - med[..., np.newaxis]
@@ -1063,12 +1061,10 @@ def imblur(Y, sig=5, siz=11, nDimBlur=None, kernel=None, opencv=True):
                 h /= np.sqrt(h.dot(h))
                 shape = [1] * len(Y.shape)
                 shape[i] = -1
-                X = correlate(X, h.reshape(shape), mode='constant')
+                X = scipy.ndimage.correlate(X, h.reshape(shape), mode='constant')
 
     else:
-        X = correlate(Y, kernel[..., np.newaxis], mode='constant')
-        # for t in range(np.shape(Y)[-1]):
-        #    X[:,:,t] = correlate(Y[:,:,t],kernel,mode='constant', cval=0.0)
+        X = scipy.ndimage.correlate(Y, kernel[..., np.newaxis], mode='constant')
 
     return X
 
@@ -1109,13 +1105,13 @@ def hals(Y, A, C, b, f, bSiz=3, maxIter=5):
     """
 
     # smooth the components
-    dims, T = np.shape(Y)[:-1], np.shape(Y)[-1]
+    dims, T = Y.shape[:-1], Y.shape[-1]
     K = A.shape[1]  # number of neurons
     nb = b.shape[1]  # number of background components
     if bSiz is not None:
         if isinstance(bSiz, (int, float)):
              bSiz = [bSiz] * len(dims)
-        ind_A = nd.filters.uniform_filter(np.reshape(A,
+        ind_A = scipy.ndimage.uniform_filter(np.reshape(A,
                 dims + (K,), order='F'), size=bSiz + [0])
         ind_A = np.reshape(ind_A > 1e-10, (np.prod(dims), K), order='F')
     else:

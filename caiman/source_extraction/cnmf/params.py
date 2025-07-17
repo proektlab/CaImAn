@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
+import importlib.metadata
 import json
 import logging
 import numpy as np
 import os
-import pkg_resources
 from pprint import pformat
 import scipy
 from scipy.ndimage import generate_binary_structure, iterate_structure
@@ -453,7 +453,7 @@ class CNMFParams(object):
                 If set to False, a list of submatrices is saved (typically faster).
             
             init_batch: int, default: 200,
-                length of mini batch used for initialization
+                length of mini batch used for initialization (must not exceed frame count on first file)
 
             init_method: 'bare'|'cnmf'|'seeded', default: 'bare',
                 initialization method
@@ -672,7 +672,7 @@ class CNMFParams(object):
             'decay_time': decay_time,
             'dxy': dxy,
             'var_name_hdf5': var_name_hdf5,
-            'caiman_version': pkg_resources.get_distribution('caiman').version,
+            'caiman_version': importlib.metadata.version('caiman'),
             'last_commit': None
         }
 
