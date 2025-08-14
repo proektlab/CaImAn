@@ -296,7 +296,8 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
                                                                   bigtiff=bigtiff, imagej=imagej)
 
     args = ((out_args, filename, subind, channel, plane, False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
-            for out_args, filename, subind, this_ndead, this_offset in zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset))
+            for out_args, filename, subind, this_ndead, this_offset in
+            zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset, strict=True))
     
     pbar = trange(len(filenames), desc='Converting each file...', unit='file')
     if dview is not None and (might_do_correction or len(filenames) > 10):  # (is it worth doing this step in parallel?)
@@ -314,7 +315,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             for res, _ in zip(dview.map(_sbxread_worker, args), pbar):
                 pass
     else:
-        for arglist, _ in zip(args, pbar):
+        for arglist, _ in zip(args, pbar, strict=True):
             _sbxread_worker(arglist, dview)
     pbar.close()
     return all_n_frames_out
@@ -514,7 +515,7 @@ def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], fr
         'offset': offset,
         'shape': shape,
         'order': 'C'}
-        for offset, shape in zip(byte_offsets, shapes)]
+        for offset, shape in zip(byte_offsets, shapes, strict=True)]
     return frame_slices, out_memmap_args
 
 
