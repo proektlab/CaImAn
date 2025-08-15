@@ -202,7 +202,22 @@ class MotionCorrect(object):
         self.indices = indices
         self.shifts_interpolate = shifts_interpolate
         if self.use_cuda:
-            logger.warn("cuda is no longer supported; this kwarg will be removed in a future version of caiman")
+            logger.warning("cuda is no longer supported; this kwarg will be removed in a future version of caiman")
+
+    def __str__(self):
+        ret = f"Caiman MotionCorrect Object. Subfields:{list(self.__dict__.keys())}"
+        if hasattr(self, 'fname'):
+            ret += "MotionCorrect backing fname is {self.fname}"
+            if 'tmp_mov_mot_corr' in self.fname:
+                ret += "Target data was passed inline"
+        return ret
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __getitem__(self, idx):
+        return getattr(self, idx)
+    # We intentionally do not provide __setitem__
 
     def motion_correct(self, template=None, save_movie=False):
         """general function for performing all types of motion correction. The
@@ -218,12 +233,8 @@ class MotionCorrect(object):
 
             save_movie: bool, default: False
                 flag for saving motion corrected file(s) as memory mapped file(s)
-
-        Returns:
-            self
         """
-        # TODO: Review the docs here, and also why we would ever return self
-        #       from a method that is not a constructor
+        # TODO: Review the docs here
         if self.min_mov is None:
             if self.gSig_filt is None:
                 iterator = caiman.base.movies.load_iter(self.fname[0],
@@ -255,7 +266,6 @@ class MotionCorrect(object):
             b0 = np.ceil(np.max(np.abs(self.shifts_rig)))
         self.border_to_0 = b0.astype(int)
         self.mmap_file = self.fname_tot_els if self.pw_rigid else self.fname_tot_rig
-        return self
 
     def motion_correct_rigid(self, template: Optional[np.ndarray] = None, save_movie=False) -> None:
         """
@@ -484,7 +494,8 @@ class MotionCorrect(object):
             return caiman.movie(np.stack(list(m_reg), axis=0))
 
 def apply_shift_iteration(img, shift, border_nan=False, border_type=cv2.BORDER_REFLECT):
-    # todo todocument
+    # Used by MotionCorrect.apply_shifts_movie(), tile_and_correct(), and apply_shift_online()
+    # Applies an xy shift to one iterable unit of a movie.
 
     sh_x_n, sh_y_n = shift
     w_i, h_i = img.shape
@@ -718,7 +729,7 @@ def motion_correct_online_multifile(list_files, add_to_movie, order='C', **kwarg
     kwargs_['order'] = order
     total_frames = 0
     for file_ in list_files:
-        logger.info('Processing: {file_}')
+        logger.info(f'Processing: {file_}')
         kwargs_['template'] = template
         kwargs_['save_base_name'] = os.path.splitext(file_)[0]
         tffl = tifffile.TiffFile(file_)
@@ -993,7 +1004,7 @@ def bin_median(mat, window=10, exclude_nans=True):
             median image
     """
 
-    T, d1, d2 = np.shape(mat)
+    T, d1, d2 = mat.shape
     if T < window:
         window = T
     num_windows = int(T // window)
@@ -1022,7 +1033,7 @@ def bin_median_3d(mat, window=10, exclude_nans=True):
             median image
     """
 
-    T, d1, d2, d3 = np.shape(mat)
+    T, d1, d2, d3 = mat.shape
     if T < window:
         window = T
     num_windows = int(T // window)
@@ -1683,14 +1694,14 @@ def apply_shifts_dft(src_freq, shifts, diffphase, is_freq=True, border_nan=True)
             src_freq = np.array(src_freq, dtype=np.complex128, copy=False)
 
     if not is3D:
-        nr, nc = np.shape(src_freq)
+        nr, nc = src_freq.shape
         Nr = ifftshift(np.arange(-np.fix(nr/2.), np.ceil(nr/2.)))
         Nc = ifftshift(np.arange(-np.fix(nc/2.), np.ceil(nc/2.)))
         Nc, Nr = np.meshgrid(Nc, Nr)
         Greg = src_freq * np.exp(1j * 2 * np.pi *
                                  (-shifts[0] * Nr / nr - shifts[1] * Nc / nc))
     else:
-        nr, nc, nd = np.array(np.shape(src_freq), dtype=float)
+        nr, nc, nd = np.array(src_freq.shape, dtype=float)
         Nr = ifftshift(np.arange(-np.fix(nr / 2.), np.ceil(nr / 2.)))
         Nc = ifftshift(np.arange(-np.fix(nc / 2.), np.ceil(nc / 2.)))
         Nd = ifftshift(np.arange(-np.fix(nd / 2.), np.ceil(nd / 2.)))
@@ -2085,7 +2096,7 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
         return new_img - add_to_movie, (-rigid_shts[0], -rigid_shts[1]), None, None
     else:
         # extract patches
-        logger.info("Extracting patches")
+        logger.debug("Extracting patches")
         xy_grid: list[tuple[int, int]] = []
         templates: list[np.ndarray] = []
 
@@ -2107,7 +2118,7 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
             ub_shifts = None
 
         # extract shifts for each patch
-        logger.info("extracting shifts for each patch")
+        logger.debug("Extracting shifts for each patch")
         shfts_et_all = [register_translation(
             a, b, c, shifts_lb=lb_shifts, shifts_ub=ub_shifts, max_shifts=max_shifts, use_cuda=use_cuda) for a, b, c in zip(
             imgs, templates, [upsample_factor_fft] * num_tiles)]
@@ -2640,10 +2651,10 @@ def compute_metrics_motion_correction(fname, final_size_x, final_size_y, swap_di
     m_min = mi + (ma - mi) / 100
     m_max = mi + (ma - mi) / 4
 
-    max_shft_x = int(np.ceil((np.shape(m)[1] - final_size_x) / 2))
-    max_shft_y = int(np.ceil((np.shape(m)[2] - final_size_y) / 2))
-    max_shft_x_1 = - ((np.shape(m)[1] - max_shft_x) - (final_size_x))
-    max_shft_y_1 = - ((np.shape(m)[2] - max_shft_y) - (final_size_y))
+    max_shft_x = int(np.ceil((m.shape[1] - final_size_x) / 2))
+    max_shft_y = int(np.ceil((m.shape[2] - final_size_y) / 2))
+    max_shft_x_1 = - ((m.shape[1] - max_shft_x) - (final_size_x))
+    max_shft_y_1 = - ((m.shape[2] - max_shft_y) - (final_size_y))
     if max_shft_x_1 == 0:
         max_shft_x_1 = None
 

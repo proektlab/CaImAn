@@ -25,6 +25,7 @@ from scipy.ndimage import percentile_filter
 from scipy.sparse import coo_matrix, csc_matrix, spdiags, hstack
 from scipy.stats import norm
 from sklearn.decomposition import NMF
+from skimage.morphology import disk
 from sklearn.preprocessing import normalize
 import tensorflow as tf
 from time import time
@@ -47,9 +48,9 @@ from caiman.source_extraction.cnmf.pre_processing import get_noise_fft
 from caiman.source_extraction.cnmf.utilities import (update_order, peak_local_max, decimation_matrix,
                         gaussian_filter, uniform_filter)
 import caiman.summary_images
-from caiman.utils.utils import save_dict_to_hdf5, load_dict_from_hdf5, parmap, load_graph
-from caiman.utils.stats import pd_solve
 from caiman.utils.nn_models import (fit_NL_model, create_LN_model, quantile_loss, rate_scheduler)
+from caiman.utils.stats import pd_solve
+from caiman.utils.utils import save_dict_to_hdf5, load_dict_from_hdf5, parmap, load_graph
 
 try:
     cv2.setNumThreads(0)
@@ -62,6 +63,10 @@ try:
 except:
     def profile(a): return a
 
+#TODO If we ever get a chance, it would make sense to refactor CNMF and OnACID to have a
+#     parent class, as OnACID started as a copy of the CNMF codebase and they have similar
+#     APIs and intent, just a very different execution strategy. It would take some thought
+#     on how to do this without breaking compatibility, and on how big the parent class might be.
 
 class OnACID(object):
     """  Source extraction of streaming data using online matrix factorization.
@@ -115,6 +120,37 @@ class OnACID(object):
         self.dview = dview
         if Ain is not None:
             self.estimates.A = Ain
+        if self.params.motion['splits_rig'] > self.params.online['init_batch']/2:
+            raise Exception("In params, online.init_batch and motion.num_frames_split have incompatible values; consider increasing online.init_batch to be a small multiple of the other")
+            # See issue #1483; it would actually be better to change initialisation so it ignores splits_rig (either using a default
+            # value or providing an alternate parameter for that), but that's a much more intrusive change and would potentially
+            # change things for code/notebooks that've worked for a long time; we should save such changes for a major rewrite
+            # (if someone takes a particular interest in that).
+
+    def __str__(self):
+        ret = f"Caiman OnACID Object. subfields:{list(self.__dict__.keys()) }"
+        if hasattr(self.estimates, 'A') and self.estimates.A is not None:
+            ret += f" A.shape={self.estimates.A.shape}"
+        if hasattr(self.estimates, 'b') and self.estimates.b is not None:
+            ret += f" b.shape={self.estimates.b.shape}"
+        if hasattr(self.estimates, 'C') and self.estimates.C is not None:
+            ret += f" C.shape={self.estimates.C.shape}"
+        return ret
+    
+    def __repr__(self):
+        ret = f"Caiman OnACID Object"
+        if hasattr(self.estimates, 'A') and self.estimates.A is not None:
+            ret += f" A.shape={self.estimates.A.shape}"
+        if hasattr(self.estimates, 'b') and self.estimates.b is not None and len(self.estimates.b.shape) > 1:
+            ret += f" bg components={self.estimates.b.shape[1]}"
+        if hasattr(self.estimates, 'C') and self.estimates.C is not None:
+            ret += f" C.shape={self.estimates.C.shape}"
+        ret += " Use str() for more details"
+        return ret
+
+    def __getitem__(self, idx):
+        return getattr(self, idx)
+    # We want subscripting to be read-only so we do not define a __setitem__ method
 
     @profile
     def _prepare_object(self, Yr, T, new_dims=None, idx_components=None):
@@ -149,7 +185,7 @@ class OnACID(object):
 
         if Yr.shape[-1] != self.params.get('online', 'init_batch'):
             raise Exception(
-                'The movie size used for initialization does not match with the minibatch size')
+                'The movie size used for initialization does not match the minibatch size')
 
         if new_dims is not None:
 
@@ -303,6 +339,7 @@ class OnACID(object):
             self.estimates.rho_buf = RingBuffer(self.estimates.rho_buf, self.params.get('online', 'minibatch_shape'))
             self.estimates.sv = np.sum(self.estimates.rho_buf.get_last_frames(
                 min(self.params.get('online', 'init_batch'), self.params.get('online', 'minibatch_shape')) - 1), 0)
+
         self.estimates.AtA = (self.estimates.Ab.T.dot(self.estimates.Ab)).toarray()
         self.estimates.AtY_buf = self.estimates.Ab.T.dot(self.estimates.Yr_buf.T)
         self.estimates.groups = list(map(list, update_order(self.estimates.Ab)[0]))
@@ -347,7 +384,6 @@ class OnACID(object):
         self.loaded_model = loaded_model
 
         if self.is1p:
-            from skimage.morphology import disk
             radius = int(round(self.params.get('init', 'ring_size_factor') *
                 self.params.get('init', 'gSiz')[0] / float(ssub_B)))
             ring = disk(radius + 1)
@@ -404,7 +440,7 @@ class OnACID(object):
     @profile
     def fit_next(self, t, frame_in, num_iters_hals=3):
         """
-        This method fits the next frame using the CaImAn online algorithm and
+        This method fits the next frame using the online algorithm and
         updates the object. Does NOT perform motion correction, see ``mc_next()``
 
         Args
@@ -417,6 +453,7 @@ class OnACID(object):
             num_iters_hals: int, optional
                 maximal number of iterations for HALS (NNLS via blockCD)
         """
+        # FIXME This whole function is overly complex; should rewrite it for legibility
         logger = logging.getLogger("caiman")
         t_start = time()
 
@@ -486,7 +523,6 @@ class OnACID(object):
         t_new = time()
         num_added = 0
         if self.params.get('online', 'update_num_comps'):
-
             if self.params.get('online', 'use_corr_img'):
                 corr_img_mode = 'simple'  #'exponential'  # 'cumulative'
                 self.estimates.corr_img = caiman.summary_images.update_local_correlations(
@@ -519,6 +555,7 @@ class OnACID(object):
             else:
                 g_est = 0
             use_corr = self.params.get('online', 'use_corr_img')
+            # FIXME The next statement is really hard to read
             (self.estimates.Ab, Cf_temp, self.estimates.Yres_buf, self.estimates.rho_buf,
                 self.estimates.CC, self.estimates.CY, self.ind_A, self.estimates.sv,
                 self.estimates.groups, self.estimates.ind_new, self.ind_new_all,
@@ -1037,6 +1074,7 @@ class OnACID(object):
             templ += B
         else:
             templ = self.estimates.Ab.dot(self.estimates.C_on[:self.M, t-1])
+
         templ = templ.reshape(self.params.get('data', 'dims'), order='F')
         if self.params.get('online', 'normalize'):
             templ *= self.img_norm
@@ -1080,8 +1118,8 @@ class OnACID(object):
 
     def fit_online(self, **kwargs):
         """Implements the caiman online algorithm on the list of files fls. The
-        files are taken in alpha numerical order and are assumed to each have
-        the same number of frames (except the last one that can be shorter).
+        files are read in alphanumerical order and are assumed to each have
+        the same number of frames (except for the last, which can be shorter).
         Caiman online is initialized using the seeded or bare initialization
         methods.
 
@@ -1102,9 +1140,8 @@ class OnACID(object):
                 additional parameters used to modify self.params.online']
                 see options.['online'] for details
 
-        Returns:
-            self (results of caiman online)
         """
+
         logger = logging.getLogger("caiman")
         self.t_init = -time()
         fls = self.params.get('data', 'fnames')
@@ -1144,6 +1181,7 @@ class OnACID(object):
                 self.params.set('ring_CNN', {'path_to_model': path_to_model})
         else:
             model_LN = None
+
         epochs = self.params.get('online', 'epochs')
         self.initialize_online(model_LN=model_LN)
         self.t_init += time()
@@ -1290,13 +1328,12 @@ class OnACID(object):
         self.estimates.C_on = self.estimates.C_on[:self.M]
         self.estimates.noisyC = self.estimates.noisyC[:self.M]
 
-        return self
-
     def create_frame(self, frame_cor, show_residuals=True, resize_fact=3, transpose=True):
         if show_residuals:
             caption = 'Corr*PSNR buffer' if self.params.get('online', 'use_corr_img') else 'Mean Residual Buffer'
         else:
             caption = 'Identified Components'
+
         captions = ['Raw Data', 'Inferred Activity', caption, 'Denoised Data']
         self.dims = self.estimates.dims
         self.captions = captions
@@ -1319,6 +1356,7 @@ class OnACID(object):
                     self.estimates.W.dot(bc2))).reshape(self.dims, order='F')
         else:
             bgkrnd_frame = b.dot(f[:, self.t - 1]).reshape(self.dims, order='F')  # denoised frame (components + background)
+
         denoised_frame = comps_frame + bgkrnd_frame
         denoised_frame = (denoised_frame.copy() - self.bnd_Y[0])/np.diff(self.bnd_Y)
         comps_frame = (comps_frame.copy() - self.bnd_AC[0])/np.diff(self.bnd_AC)
@@ -1336,7 +1374,7 @@ class OnACID(object):
         else:
             all_comps = np.array(A.sum(-1)).reshape(self.dims, order='F')
             fac = 2
-        #all_comps = (all_comps.copy() - self.bnd_Y[0])/np.diff(self.bnd_Y)
+
         all_comps = np.minimum(np.maximum(all_comps, 0)*fac, 1)
                                                   # spatial shapes
         frame_comp_1 = cv2.resize(np.concatenate([frame_plot, all_comps * 1.], axis=-1),
@@ -1770,7 +1808,7 @@ def demix_and_deconvolve(C, noisyC, AtY, AtA, OASISinstances, iters=3, n_refit=0
 def init_shapes_and_sufficient_stats(Y, A, C, b, f, W=None, b0=None, ssub_B=1, bSiz=3,
                                      downscale_matrix=None, upscale_matrix=None):
     # smooth the components
-    dims, T = np.shape(Y)[:-1], np.shape(Y)[-1]
+    dims, T = Y.shape[:-1], Y.shape[-1]
     K = A.shape[1]  # number of neurons
     if W is None:
         nb = b.shape[1]  # number of background components
@@ -2143,7 +2181,7 @@ def update_num_components(t, sv, Ab, Cf, Yres_buf, Y_buf, rho_buf,
     gHalf = np.array(gSiz) // 2
 
     # number of total components (including background)
-    M = np.shape(Ab)[-1]
+    M = Ab.shape[-1]
     N = M - gnb                 # number of components (without background)
 
     if corr_img is None:
@@ -2181,7 +2219,7 @@ def update_num_components(t, sv, Ab, Cf, Yres_buf, Y_buf, rho_buf,
                        for ij in ijSig]), dims, order='F').ravel()
 
         cin_circ = cin.get_ordered()
-        useOASIS = False  # whether to use faster OASIS for cell detection
+        useOASIS = False  # whether to use faster OASIS for cell detection FIXME don't hardcode things internally like this
         accepted = True   # flag indicating new component has not been rejected yet
 
         if Ab_dense is None:
@@ -2237,18 +2275,32 @@ def update_num_components(t, sv, Ab, Cf, Yres_buf, Y_buf, rho_buf,
             ind_new.append(ijSig)
 
             if oases is not None:
-                if not useOASIS:
+                if not useOASIS: # FIXME bad variable name, also hardcoded?
                     # lambda from Selesnick's 3*sigma*|K| rule
                     # use noise estimate from init batch or use std_rr?
                     #                    sn_ = sqrt((ain**2).dot(sn[indices]**2)) / sqrt(1 - g**2)
+                    # The one-liner below was too hard to read -- breaking it apart for legibility
+                    # (and also to make it easier to temporarily add assertions with np.isscalar and
+                    # unpack size-1 arrays that are no longer ok in newer versions of numpy/scipy)
                     sn_ = std_rr
-                    oas = OASIS(np.ravel(g)[0], 3 * sn_ /
-                                (sqrt(1 - g**2) if np.size(g) == 1 else
-                                 sqrt((1 + g[1]) * ((1 - g[1])**2 - g[0]**2) / (1 - g[1])))
-                                      if s_min == 0 else 0,
-                                      s_min, num_empty_samples=t +
-                                      1 - len(cin_res),
-                                      g2=0 if np.size(g) == 1 else g[1])
+                    if np.size(sn_) == 1:
+                        sn_ = np.ravel(std_rr)[0]
+                    else:
+                        logger.warning("std_rr has more dimensionality than expected and this may lead to problems")
+                        sn_ = std_rr
+
+                    oasis_g = np.ravel(g)[0]
+                    if s_min != 0:
+                        oasis_lambda = 0
+                    elif np.size(g) == 1:
+                        oasis_lambda = 3 * sn_ / (sqrt(1 - np.ravel(g)[0]**2))
+                    else:
+                        oasis_lambda = 3 * sn_ / sqrt((1 + np.ravel(g)[1]) * ((1 - np.ravel(g)[1])**2 - np.ravel(g)[0]**2) / (1 - np.ravel(g)[1]))
+
+                    oasis_ne = t + 1 - len(cin_res)
+                    oasis_g2 = 0 if np.size(g) == 1 else np.ravel(g)[1]
+
+                    oas = OASIS(oasis_g, oasis_lambda, s_min, num_empty_samples=oasis_ne, g2=oasis_g2)
                     for yt in cin_res:
                         oas.fit_next(yt)
 
@@ -2436,7 +2488,7 @@ def initialize_movie_online(Y, K, gSig, rf, stride, base_name,
                                               update_num_comps=True, rval_thr=rval_thr_online, thresh_fitness_delta=thresh_fitness_delta_online, thresh_fitness_raw=thresh_fitness_raw_online,
                                               batch_update_suff_stat=True, max_comp_update_shape=5)
 
-    cnm_init = cnm_init.fit(images)
+    cnm_init.fit(images)
     A_tot = cnm_init.A
     C_tot = cnm_init.C
     YrA_tot = cnm_init.YrA
@@ -2471,7 +2523,7 @@ def initialize_movie_online(Y, K, gSig, rf, stride, base_name,
                                                 update_num_comps=True, rval_thr=rval_thr_refine, thresh_fitness_delta=thresh_fitness_delta_refine, thresh_fitness_raw=thresh_fitness_raw_refine,
                                                 batch_update_suff_stat=True, max_comp_update_shape=5)
 
-    cnm_refine = cnm_refine.fit(images)
+    cnm_refine.fit(images)
 
     A, C, b, f, YrA = cnm_refine.A, cnm_refine.C, cnm_refine.b, cnm_refine.f, cnm_refine.YrA
 
