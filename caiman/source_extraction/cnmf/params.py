@@ -43,7 +43,7 @@ class CNMFParams(object):
                  thresh_fitness_delta=-50, thresh_fitness_raw=None, thresh_overlap=0.5,
                  update_freq=200, update_num_comps=True, use_dense=True, use_peak_max=True,
                  only_init_patch=True, var_name_hdf5='mov', max_merge_area=None, 
-                 use_corr_img=False,
+                 use_corr_img=False, highpass_cutoff=0.,
                  params_from_file:Optional[str]=None,
                  params_dict={},
                  ):
@@ -180,6 +180,9 @@ class CNMFParams(object):
 
             sn: np.array or None, default: None
                 noise level for each pixel
+            
+            highpass_cutoff: float, default: 0
+                cutoff (Hz) for highpass filter to eliminate slow drift, 0 skips this step
 
           CNMFParams.init (these control how CNMF should be initialised):
             K: int, default: 30
@@ -707,6 +710,7 @@ class CNMFParams(object):
             'p': p,                      # order of AR indicator dynamics
             'pixels': None,              # pixels to be excluded due to saturation
             'sn': None,                  # noise level for each pixel
+            'highpass_cutoff': highpass_cutoff,
         }
 
         self.init = {

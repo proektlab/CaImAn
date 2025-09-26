@@ -15,8 +15,10 @@ import scipy
 from scipy.linalg import toeplitz
 import shutil
 import tempfile
+from typing import Union
 
 import caiman.mmapping
+import caiman.paths
 
 
 def interpolate_missing_data(Y):
@@ -51,6 +53,91 @@ def interpolate_missing_data(Y):
             'The algorithm has not been tested with missing values (NaNs). Remove NaNs and rerun the algorithm.')
 
     return Y, coor
+
+
+def highpass_filter(Y, dims: tuple[int, ...], fr: float, cutoff: float, n_pixels_per_process=100, dview=None):
+    """
+    Highpass filters the input data with the given frequency cutoff.
+    Zero-phase filtering is performed with a 4th-order Butterworth filter.
+    Result is written into a temporary file and a memmap to this file is returned.
+    
+    Args:
+        Y: np.ndarray
+            Input movie data (pixels x time)
+
+        dims: tuple[int, ...]
+            Spatial dims of Y (Y x X [x Z])
+        
+        fr: float
+            Frame rate of Y
+        
+        cutoff: float
+            Frequency cutoff for high-pass filter
+        
+        n_pixels_per_process: int
+            Number of pixels that can be processed per process in parallel
+        
+        dview: None | multiprocessing.Pool | ipyparallel.DirectView
+            Handle for parallel processing
+    
+    Returns:
+        Y_filtered: np.memmap
+            Memory-mapped output of filtering (same shape as Y)
+    """
+    logger = logging.getLogger("caiman")
+    logger.info('High-pass filtering data')
+
+    n_pix, n_frames = Y.shape
+
+    # make place to store result, keeping dimension information in filename
+    data_suffix = caiman.paths.memmap_frames_filename('', dims=dims, frames=n_frames, order='C')
+    filtered_file = tempfile.NamedTemporaryFile(
+        dir=caiman.paths.get_tempdir(), suffix=data_suffix, delete=False)
+    filtered_path = filtered_file.name
+    # allocate space in the file
+    Y_filtered = np.memmap(filtered_file, dtype=np.float32, shape=Y.shape, order='C')
+
+    # make 4th-order butterworth
+    sos = scipy.signal.butter(4, cutoff, btype='highpass', output='sos', fs=fr)
+
+    # filtfilt in parallel
+    pixel_group_starts = list(range(0, n_pix, n_pixels_per_process))
+    
+    Y_name = Y.filename if isinstance(Y, np.memmap) else None  # load memmap in subprocess if possible
+    argsin = [(Y_name if Y_name else Y[start:start+n_pixels_per_process, :],
+               start, start + n_pixels_per_process, sos, filtered_path)
+              for start in pixel_group_starts[:-1]]
+    
+    # append last section which may be shorter
+    argsin.append((Y_name if Y_name else Y[pixel_group_starts[-1]:, :],
+                   pixel_group_starts[-1], n_pix, sos, filtered_path))
+
+    if dview is None:
+        map(highpass_helper, argsin)
+    else:
+        if 'multiprocessing' in str(type(dview)):
+            dview.map_async(highpass_helper, argsin).get(4294967)
+        else:
+            dview.map_sync(highpass_helper, argsin)
+    
+    # return a memmap to the results
+    return Y_filtered
+
+
+def highpass_helper(args: tuple[Union[str, np.ndarray], int, int, np.ndarray, str]):
+    data_in, pixel_start, pixel_end, sos, output_path = args
+    if isinstance(data_in, str):
+        data_in = caiman.mmapping.load_memmap(data_in)[0][pixel_start:pixel_end]
+    
+    T = data_in.shape[1]
+
+    # filter
+    filtered = scipy.signal.sosfiltfilt(sos, data_in, axis=1).astype(np.float32)
+
+    with open(output_path, 'r+b') as f:
+        f.seek(pixel_start * 4 * T)  # 4 for float32
+        f.write(filtered.data)
+
 
 def find_unsaturated_pixels(Y, saturationValue=None, saturationThreshold=0.9, saturationTime=0.005):
     """Identifies the saturated pixels that are saturated and returns the ones that are not.
@@ -216,14 +303,12 @@ def get_noise_fft_parallel(Y, n_pixels_per_process=100, dview=None, **kwargs):
         sn: ndarray(double)
             noise associated to each pixel
     """
-    folder = tempfile.mkdtemp()
-
     # Pre-allocate a writeable shared memory map as a container for the
     # results of the parallel computation
     pixel_groups = list(
         range(0, Y.shape[0] - n_pixels_per_process + 1, n_pixels_per_process))
 
-    if isinstance(Y, np.core.memmap):  # if input file is already memory mapped then find the filename
+    if isinstance(Y, np.memmap):  # if input file is already memory mapped then find the filename
         Y_name = Y.filename
 
     else:
@@ -264,13 +349,6 @@ def get_noise_fft_parallel(Y, n_pixels_per_process=100, dview=None, **kwargs):
 
     sn_s = np.array(sn_s)
     psx_s = np.array(psx_s)
-
-    try:
-        shutil.rmtree(folder)
-
-    except:
-        print(("Failed to delete: " + folder))
-        raise
 
     return sn_s, psx_s
 
@@ -471,16 +549,23 @@ def nextpow2(value):
     return exponent
 
 
-def preprocess_data(Y, sn=None, dview=None, n_pixels_per_process=100,
+def preprocess_data(Y, dims: tuple[int, ...], fr: float, sn=None, dview=None, n_pixels_per_process=100,
                     noise_range=[0.25, 0.5], noise_method='logmexp',
                     compute_g=False, p=2, lags=5, include_noise=False,
-                    pixels=None, max_num_samples_fft=3000, check_nan=True):
+                    pixels=None, max_num_samples_fft=3000, check_nan=True,
+                    highpass_cutoff=0.):
     """
     Performs the pre-processing operations described above.
 
     Args:
         Y: ndarray
             input movie (n_pixels x Time). Can be also memory mapped file.
+
+        dims: tuple[int, ...]
+            spatial dimensions of Y (Y x X [x Z])
+
+        fr: float
+            frame rate
 
         n_processes: [optional] int
             number of processes/threads to use concurrently
@@ -507,10 +592,13 @@ def preprocess_data(Y, sn=None, dview=None, n_pixels_per_process=100,
             'mean': Mean
             'median': Median
             'logmexp': Exponential of the mean of the logarithm of PSD (default)
+        
+        highpass_cutoff: float
+            cutoff (Hz) for highpass filter to eliminate slow drift, default = 0 which skips this step.
 
     Returns:
         Y: ndarray
-             movie preprocessed (n_pixels x Time). Can be also memory mapped file.
+            movie preprocessed (n_pixels x Time). Can be also memory mapped file.
         g:  np.ndarray (p x 1)
             Discrete time constants
         psx: ndarray
@@ -521,6 +609,9 @@ def preprocess_data(Y, sn=None, dview=None, n_pixels_per_process=100,
 
     if check_nan:
         Y, coor = interpolate_missing_data(Y)
+
+    if highpass_cutoff > 0:
+        Y = highpass_filter(Y, dims, fr, highpass_cutoff, n_pixels_per_process=n_pixels_per_process, dview=dview)
 
     if sn is None:
         if dview is None:

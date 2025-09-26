@@ -525,7 +525,6 @@ class CNMF(object):
         T = images.shape[0]
         self.params.set('online', {'init_batch': T})
         self.dims = images.shape[1:]
-        Y = np.transpose(images, list(range(1, len(self.dims) + 1)) + [0])
         Yr = np.transpose(np.reshape(images, (T, -1), order='F'))
         if np.isfortran(Yr):
             raise Exception('The file is in F order, it should be in C order (see save_memmap function)')
@@ -534,7 +533,6 @@ class CNMF(object):
 
         # Make sure filename is correctly set (numpy sets it to None sometimes)
         try:
-            Y.filename = images.filename
             Yr.filename = images.filename
             self.mmap_file = images.filename
         except AttributeError:  # if no memmapping because we're working with small data
@@ -559,6 +557,8 @@ class CNMF(object):
         if self.params.get('patch', 'rf') is None:  # no patches
             logger.info('preprocessing ...')
             Yr = self.preprocess(Yr)
+            Y = Yr.reshape((self.dims) + (T,), order='F')  # view with pixels not flattened
+
             if self.estimates.A is None:
                 logger.info('initializing ...')
                 self.initialize(Y)
@@ -927,9 +927,8 @@ class CNMF(object):
                 2d array of data (pixels x timesteps) typically in memory
                 mapped form
         """
-        # TODO Weird that this returns Yr
         Yr, self.estimates.sn, self.estimates.g, self.estimates.psx = preprocess_data(
-            Yr, dview=self.dview, **self.params.get_group('preprocess'))
+            Yr, self.dims, fr=self.params.get('data', 'fr'), dview=self.dview, **self.params.get_group('preprocess'))
         return Yr
 
 
