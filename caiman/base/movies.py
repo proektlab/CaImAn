@@ -1052,9 +1052,6 @@ def load(file_name: Union[str, list[str]],
                         input_arr = input_arr.reshape(tffl_shape)
 
                     input_arr = input_arr[tuple(subindices)]
-
-                    if in_memory:
-                        input_arr = np.asarray(input_arr)
                 input_arr = np.squeeze(input_arr)
 
         elif extension in ('.avi', '.mkv'):      # load video file
