@@ -28,7 +28,8 @@ def loadmat_sbx(filename: str) -> dict[str, Any]:
     from mat files. It calls the function check keys to fix all entries
     which are still mat-objects
     """
-    data_ = scipy.io.loadmat(filename, struct_as_record=False, squeeze_me=True)
+    mat_filename = os.path.splitext(filename)[0] + '.mat'
+    data_ = scipy.io.loadmat(mat_filename, struct_as_record=False, squeeze_me=True)
     _check_keys(data_)
     return data_['info']
 
