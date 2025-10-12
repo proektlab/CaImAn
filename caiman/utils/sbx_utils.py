@@ -473,6 +473,10 @@ def sbx_meta_data(filename: str):
 
 def get_odd_row_ndead(filename: str) -> int:
     """From sbx file (assumed to be bidirectional), estimate number of dead columns at left of odd rows."""
+    basename, ext = os.path.splitext(filename)
+    if ext == '.sbx':
+        filename = basename
+
     info = loadmat_sbx(filename + '.mat')
     data_shape = sbx_shape(filename, info)  # (chans, X, Y, Z, frames)
     sbx_mmap = np.memmap(filename + '.sbx', mode='r', dtype='uint16', shape=data_shape, order='F')
