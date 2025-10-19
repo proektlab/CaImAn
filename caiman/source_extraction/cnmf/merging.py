@@ -48,7 +48,7 @@ def get_ROIs_to_merge(A: csc_matrix, C: np.ndarray, thr=0.85) -> tuple[list[np.n
     list_conxcomp = np.asarray(list_conxcomp_initial).T
 
     if list_conxcomp.ndim > 1:
-        cor = np.zeros((list_conxcomp.shape[1], 1))
+        cor = np.zeros(list_conxcomp.shape[1])
         for i in range(np.size(cor)):
             fm = np.where(list_conxcomp[:, i])[0]
             for j1 in range(np.size(fm)):
@@ -56,11 +56,11 @@ def get_ROIs_to_merge(A: csc_matrix, C: np.ndarray, thr=0.85) -> tuple[list[np.n
                     cor[i] = cor[i] + C_corr[fm[j1], fm[j2]]
         if np.size(cor) > 1:
             # we get the size (indices)
-            ind = np.argsort(np.squeeze(cor))[::-1]
+            ind = np.argsort(cor)[::-1]
         else:
             ind = [0]
         merged_ROIs = [np.where(list_conxcomp[:, i])[0] for i in ind]
-        corrs = np.squeeze(cor)[ind]
+        corrs = cor[ind]
     else:
         merged_ROIs = []
         corrs = np.array([])
