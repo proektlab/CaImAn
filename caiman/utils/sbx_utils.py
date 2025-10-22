@@ -639,8 +639,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         # estimate at 3 different frames in case it changes 
         n_samps = min(len(sbx_mmap), 3)
         sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
-        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame].view(np.memmap))
-                             for frame in sample_frames)
+        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample_frames)
         if not quiet and odd_row_ndead == 0:
             logger.info('Found no dead pixels at left of odd rows')
 
@@ -828,13 +827,13 @@ def _get_output_shape(filename_or_shape: Union[str, tuple[int, ...]], subindices
     return tuple(shape_out), tuple(subinds_out)
 
 
-def _estimate_odd_row_nsaturated(frame: np.memmap) -> int:
+def _estimate_odd_row_nsaturated(frame: np.ndarray) -> int:
     """
     Based on a single frame, estimate how many columns on the left are "dead"
-    (i.e., every other line is saturated) in odd rows.
+    (i.e., every other line is 0 on disk) in odd rows.
 
     Args:
-        frame: memmmap of shape (Y, X, [Z])
+        frame: ndarray of shape (Y, X, [Z])
             One frame of data, which is still in inverted format
 
     Returns:
