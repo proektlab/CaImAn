@@ -3,7 +3,7 @@
 """
 Utility functions for Neurolabware Scanbox files (.sbx)
 """
-from ipyparallel import AsyncResult
+import datetime
 import logging
 import numpy as np
 from numpy import fft
@@ -468,6 +468,16 @@ def sbx_meta_data(filename: str):
 
         if field in info:
             meta_data[fieldout] = info[field]
+    
+    if 'datetime' in info:
+        try:
+            dt = datetime.datetime.strptime(info['datetime'], '%d-%b-%Y %H:%M:%S')
+        except ValueError:
+            # try with just the date format (used in matlab if the time is 00:00:00)
+            dt = datetime.datetime.strptime(info['datetime'], '%d-%b-%Y')
+        meta_data['ended_time'] = dt
+    else:
+        meta_data['ended_time'] = None
 
     return meta_data
 
