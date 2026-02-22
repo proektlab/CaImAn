@@ -346,7 +346,7 @@ def regression_ipyparallel(pars):
 
         # skip if no components OR pixel has 0 activity
         if np.size(c) > 0 and noise_sn[px] > 0:
-            sn = noise_sn[px] ** 2 * T
+            sn = float(noise_sn[px]) ** 2 * T  # float() to preserve numpy 1.x automatic promotion
             if method_least_square == 'lasso_lars_old':
                 raise Exception("Obsolete parameter") # Old code, support was removed
 
@@ -355,13 +355,15 @@ def regression_ipyparallel(pars):
 
             elif method_least_square == 'lasso_lars':  # lasso lars function from scikit learn
                 lambda_lasso = 0 if np.size(cct_) == 0 else \
-                    .5 * noise_sn[px] * np.sqrt(np.max(cct_)) / T
+                    .5 * float(noise_sn[px]) * float(np.sqrt(np.max(cct_))) / T  # float() to  preserve numpy 1.x automatic promotion
                 model = make_pipeline(
                     StandardScaler(with_mean=False),
                     linear_model.LassoLars(alpha=lambda_lasso, positive=True,
                                                  fit_intercept=True)
                     )
-                a = model.fit(np.array(c.T), np.ravel(y))['lassolars'].coef_
+                # promote to avoid numpy 2.x promotion issues within fit
+                a = model.fit(np.array(c.T, dtype=np.float64),
+                              np.ravel(y).astype(np.float64, copy=False))['lassolars'].coef_
 
             else:
                 raise Exception(
@@ -479,7 +481,7 @@ def threshold_components(A, dims, medw=None, thr_method='max', maxthr=0.1, nrgth
     data:list = []
     for r in res:
         At, i = r
-        indptr.append(indptr[-1]+At.indptr[-1])
+        indptr.append(indptr[-1] + int(At.indptr[-1]))
         indices.extend(At.indices.tolist())
         data.extend(At.data.tolist())
 
@@ -944,7 +946,7 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
         sqerr_accum = 0
         for batch_slice in rng.permuted(batch_slices):
             Y_batch = Y[batch_slice, :][not_px[batch_slice]]
-            X = np.maximum(Y_batch, 0)
+            X = np.maximum(Y_batch, np.float64(0))
             nmf.partial_fit(X)
             W_batch = nmf.transform(X)
             sqerr_accum += np.sum((X - W_batch @ nmf.components_) ** 2)
@@ -1046,7 +1048,7 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
             if nb > 1:
                 if in_memory:
                     logger.info('estimating f using NMF')
-                    f = NMF(nb, init='nndsvda').fit(np.maximum(Y[not_px, :], 0)).components_
+                    f = NMF(nb, init='nndsvda').fit(np.maximum(Y[not_px, :], np.float64(0))).components_
                 else:
                     # fit NMF in chunks, have to implement manually because we don't want to load
                     # all of Y[not_pix, :] to feed it 
