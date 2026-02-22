@@ -10,19 +10,19 @@ description of the array's dtype.
 
 import cv2
 import logging
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.testing as npt
-import os
-import pathlib
-import matplotlib.pyplot as plt
+import psutil
 import scipy
-from scipy.sparse import spdiags, issparse, csc_matrix, csr_matrix
 import scipy.ndimage as ndi
+from scipy.sparse import csc_matrix, csr_matrix, issparse, spdiags
 
 import caiman.base.rois
 import caiman.cluster
 import caiman.mmapping
 import caiman.source_extraction.cnmf.initialization
+import caiman.source_extraction.cnmf.map_reduce
 import caiman.utils.stats
 
 
@@ -1166,7 +1166,7 @@ def fast_graph_Laplacian(mmap_file, dims, max_radius=10, kernel='heat',
         D = scipy.sparse.spdiags(W.sum(0), 0, Np, Np)
         L = D - W
     else:
-        indices, _ = caiman.cluster.extract_patch_coordinates(dims, rf, strides)
+        indices, _ = caiman.source_extraction.cnmf.map_reduce.extract_patch_coordinates(dims, rf, strides)
         pars = []
         for i in range(len(indices)):
             pars.append([mmap_file, indices[i], kernel, sigma, thr, p,
@@ -1290,3 +1290,15 @@ def nextpow2(value):
     while avalue > np.power(2, exponent):
         exponent += 1
     return exponent
+
+
+def estimate_n_pixels_per_process(n_processes: int, T: int, dims: tuple[int, ...]) -> int:
+    """
+    Estimate a safe number of pixels to allocate to each parallel process at a time
+    """
+    # FIXME The code below is really ugly and it's hard to tell if it's doing the right thing.
+    avail_memory_per_process = psutil.virtual_memory()[1] / n_processes / 2.0**30
+    mem_per_pix = 3.6977678498329843e-09
+    npx_per_proc = int(avail_memory_per_process / 8. / mem_per_pix / T)
+    npx_per_proc = int(np.minimum(npx_per_proc, np.prod(dims) // n_processes))
+    return npx_per_proc
