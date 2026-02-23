@@ -210,6 +210,3 @@ def test_sbx_chain_to_tif():
         # cleanup
         if os.path.isfile(tif_filename):
             os.remove(tif_filename)
-    
-if __name__ == '__main__':
-    test_load_efficiency()

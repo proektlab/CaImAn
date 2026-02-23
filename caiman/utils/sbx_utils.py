@@ -727,19 +727,32 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
         # prepare for parallel processing
         if dview is not None:
+            # assume we have to load the data to pass to each subprocess
+            # (in worst case, could be processed different computers)
+            inplace = False
             if 'multiprocessing'in str(type(dview)):
                 map_fn = dview.imap
             else:
                 map_fn = dview.map_async
-            inplace = False
-        else:
-            map_fn = map
-            inplace = True
 
+            # load chunk before indexing in _load_movie_chunk
+            input_arrs = (sbx_mmap[subind_seqs[0][chunk_slice]] for chunk_slice in chunks)
+            chunk_time_inds = (slice(None) for _ in chunks)
+            output_arrs = [None] * len(chunks)  # don't write to output within call
+            
+        else:
+            inplace = True
+            map_fn = map
+
+            # pass mmap directly and load in _load_movie_chunk
+            input_arrs = (sbx_mmap for _ in chunks)
+            chunk_time_inds = (subind_seqs[0][chunk_slice] for chunk_slice in chunks)
+            output_arrs = (out_arr[chunk_slice] for chunk_slice in chunks)
+
+        # arguments to parallel or map call
         args = (
-            [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out_dtype,
-            out_arr[chunk_slice] if inplace else None]
-            for chunk_slice in chunks
+            [inds_sets, in_time_inds, in_arr, save_shape[1:], out_dtype, out_arr]
+            for in_arr, in_time_inds, out_arr in zip(input_arrs, chunk_time_inds, output_arrs)
         )
 
         if not quiet:
@@ -793,19 +806,22 @@ def _sbxread_worker(args, dview=None) -> np.ndarray:
 
 
 def _load_movie_chunk(args):
-    inds_sets, in_arr, out_shape, out_dtype, out = args
+    inds_sets, in_time_inds, in_arr, out_shape, out_dtype, out = args
     if out is None:
         out = np.empty((in_arr.shape[0],) + out_shape, dtype=out_dtype)
     for out_inds, in_inds in inds_sets:
         if np.isscalar(in_inds):
             chunk = in_inds
         else:
-            # for advanced indexing
-            #time_axis_expanded = np.expand_dims(time_axis, axis=[i+1 for i in range(len(in_inds))])
-
             # Note: important to copy the data here instead of making a view,
             # so the memmap can be closed (achieved by advanced indexing)
-            chunk = in_arr[(slice(None),) + in_inds]
+            # 2/22/26 updated so in_arr can actually be a memmap again
+
+            # expand for broadcasting
+            time_inds_expanded = np.asarray(in_time_inds)[
+                (slice(None),) + (np.newaxis,) * len(in_inds)]
+            chunk = in_arr[(time_inds_expanded,) + in_inds]
+
             # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
             np.invert(chunk, out=chunk)  # avoid copying, may be large
         out[(slice(None),) + out_inds] = chunk
