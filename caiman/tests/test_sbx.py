@@ -115,7 +115,7 @@ def test_load_efficiency():
     # data outside subindices are not being loaded into memory
     file_2d = os.path.join(TESTDATA_PATH, '2d_sbx.sbx')
     tracemalloc.start()
-    data_2d_sliced = sbx_utils.sbxread(file_2d, subindices=(slice(None), slice(None, None, 2)))
+    data_2d_sliced = sbx_utils.sbxread(file_2d, subindices=(slice(None), slice(None, None, 2)), save_memory=True)
     curr_mem, peak_mem = tracemalloc.get_traced_memory()
     assert peak_mem / curr_mem < 1.1, 'Too much memory allocated when loading'
     del data_2d_sliced
@@ -211,3 +211,5 @@ def test_sbx_chain_to_tif():
         if os.path.isfile(tif_filename):
             os.remove(tif_filename)
     
+if __name__ == '__main__':
+    test_load_efficiency()

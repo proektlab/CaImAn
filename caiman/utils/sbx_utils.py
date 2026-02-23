@@ -10,9 +10,12 @@ from numpy import fft
 import os
 import scipy
 from scipy import ndimage, interpolate
+import tempfile
 import tifffile
 from tqdm import tqdm, trange
 from typing import Union, Optional, Sequence, cast, Any, TypeGuard, get_args
+
+from caiman.paths import get_tempdir
 
 
 AnyInt = Union[int, np.integer]
@@ -74,7 +77,7 @@ def _todict(matobj) -> dict:
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
             plane: Optional[int] = None, to32: Optional[bool] = None, odd_row_ndead: Optional[int] = None,
             odd_row_offset: Optional[int] = 0, force_estim_ndead_offset: bool = False, interp: bool = True,
-            dead_pix_mode: Union[str, bool] = 'copy', dview=None, quiet=False) -> np.ndarray:
+            dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None, quiet=False) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array
 
@@ -102,7 +105,7 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
             estimated automatically for bidirectional recordings and set to 0 for unidirectional recordings.
             if this flag is true, the behavior is changed to automatically estimate ndead and offset for unidirectional recordings as well.
         
-        odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
+        odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory: see _sbxread_helper.
     """
     if subindices is None:
         subindices = slice(None)
@@ -126,7 +129,7 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
 
     return _sbxread_helper(filename, subindices=subindices, channel=channel, plane=plane, chunk_size=None, to32=to32,
                            odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
-                           dview=dview, quiet=quiet)
+                           save_memory=save_memory, dview=dview, quiet=quiet)
 
 
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
@@ -208,7 +211,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
                      bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
                      odd_row_ndead: Union[Optional[int], Sequence[Optional[int]]] = None, odd_row_offset: Union[Optional[int], Sequence[Optional[int]]] = 0,
-                     force_estim_ndead_offset: bool = False, interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None
+                     force_estim_ndead_offset: bool = False, interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None
                      ) -> list[int]:
     """
     Concatenate a list of sbx files into one tif file.
@@ -224,7 +227,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
             can specify separate subindices for each file if nested 2 levels deep; 
             X, Y, and Z sizes must match for all files after indexing.
 
-        odd_row_ndead, odd_row_offset, interp, dead_pix_mode: see _sbxread_helper.
+        odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory: see _sbxread_helper.
 
         to32, channel, plane, chunk_size, force_estim_ndead_offset: see sbx_to_tif
     Returns:
@@ -303,7 +306,9 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     frame_slices, out_memmap_args = _prepare_concat_output_memmap(fileout, save_shape, all_n_frames_out, dtype=dtype,
                                                                   bigtiff=bigtiff, imagej=imagej)
 
-    args = ((out_args, filename, subind, channel, plane, False, chunk_size, this_ndead, this_offset, interp, dead_pix_mode)
+    args = ((
+        out_args, filename, subind, channel, plane, False, chunk_size, this_ndead,
+        this_offset, interp, dead_pix_mode, save_memory)
             for out_args, filename, subind, this_ndead, this_offset in
             zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset, strict=True))
     
@@ -543,8 +548,8 @@ def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], fr
 
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
                     plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 100,
-                    odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0,
-                    interp=True, dead_pix_mode: Union[str, bool] = 'copy', dview=None, quiet=False) -> np.ndarray:
+                    odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp=True,
+                    dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None, quiet=False) -> np.ndarray:
     """
     Load frames of an .sbx file into a new NumPy array, or into the given memory-mapped file.
 
@@ -590,6 +595,9 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         dead_pix_mode: str | bool
             how to replace dead pixels identified by odd_row_nsaturated and odd_row_offset. Same options as params.motion['border_nan'],
             and True (NaN) is invalid if 'to32' is False. if interp is True, this only sets the extrapolation mode.
+        
+        save_memory: bool
+            avoid allocating more memory than needed to fit the data, even when it might be more time-inefficient
     """ 
     logger = logging.getLogger("caiman")
 
@@ -640,123 +648,143 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
     # Read from .sbx file, using memmap to avoid loading until necessary
     sbx_mmap = np.memmap(filename + '.sbx', mode='r', dtype='uint16', shape=data_shape, order='F')
-    sbx_mmap = np.transpose(sbx_mmap, (0, 4, 2, 1, 3))  # to (chans, frames, Y, X, Z)
-    sbx_mmap = sbx_mmap[channel]
+    outfile = None  # holds temporary file if necessary
 
-    if not is3D:  # squeeze out singleton plane dim
-        sbx_mmap = sbx_mmap[..., 0]
-    elif plane is not None:  # select plane relative to subindices
-        sbx_mmap = sbx_mmap[..., subind_seqs[-1][plane]]
-        subind_seqs = subind_seqs[:-1]
-    assert isinstance(sbx_mmap, np.memmap)
+    try:
+        sbx_mmap = np.transpose(sbx_mmap, (0, 4, 2, 1, 3))  # to (chans, frames, Y, X, Z)
+        sbx_mmap = sbx_mmap[channel]
 
-    # estimate dead pixels if necessary
-    if odd_row_ndead is None:
-        # estimate at 3 different frames in case it changes 
-        n_samps = min(len(sbx_mmap), 3)
-        sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
-        odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample_frames)
-        if not quiet and odd_row_ndead == 0:
-            logger.info('Found no dead pixels at left of odd rows')
+        if not is3D:  # squeeze out singleton plane dim
+            sbx_mmap = sbx_mmap[..., 0]
+        elif plane is not None:  # select plane relative to subindices
+            sbx_mmap = sbx_mmap[..., subind_seqs[-1][plane]]
+            subind_seqs = subind_seqs[:-1]
+        assert isinstance(sbx_mmap, np.memmap)
 
-    if not quiet and odd_row_ndead > 0:
-        logger.info(f'Correcting {odd_row_ndead} dead pixels at left of odd rows')
+        # estimate dead pixels if necessary
+        if odd_row_ndead is None:
+            # estimate at 3 different frames in case it changes 
+            n_samps = min(len(sbx_mmap), 3)
+            sample_frames = np.linspace(0, n_samps, endpoint=False, dtype=int)
+            odd_row_ndead = max(_estimate_odd_row_nsaturated(sbx_mmap[frame]) for frame in sample_frames)
+            if not quiet and odd_row_ndead == 0:
+                logger.info('Found no dead pixels at left of odd rows')
 
-    # estimate row offset if necessary
-    if odd_row_offset is None:
-        n_samps = min(len(sbx_mmap), 300)
-        sample = sbx_mmap[np.linspace(0, n_samps, endpoint=False, dtype=int)]
-        odd_row_offset = _estimate_odd_row_offset(sample)
-        if not quiet and odd_row_offset == 0:
-            logger.info('Found no line phase offset')
+        if not quiet and odd_row_ndead > 0:
+            logger.info(f'Correcting {odd_row_ndead} dead pixels at left of odd rows')
 
-    if not quiet and odd_row_offset != 0:
-        logger.info(f'Correcting line phase offset of {odd_row_offset}')
-    
-    if chunk_size is None:
-        # load a contiguous block all at once
-        chunk_size = n_frames_out
-    chunks = [slice(start, min(start + chunk_size, n_frames_out)) for start in range(0, n_frames_out, chunk_size)]
+        # estimate row offset if necessary
+        if odd_row_offset is None:
+            n_samps = min(len(sbx_mmap), 300)
+            sample = sbx_mmap[np.linspace(0, n_samps, endpoint=False, dtype=int)]
+            odd_row_offset = _estimate_odd_row_offset(sample)
+            if not quiet and odd_row_offset == 0:
+                logger.info('Found no line phase offset')
 
-    # create indices for loading data
-    if odd_row_ndead == 0 and odd_row_offset == 0:
-        # this list specifies how to index the input and output arrays when copying data.
-        # format of each entry: (<tuple of spatial out-indices>, <tuple of spatial in-indices>)
-        # or: (<tuple of spatial out-indices>, constant)
-        # each entry is applied in order.
-        inds_sets = [((), np.ix_(*subind_seqs[1:]))]
-        interp_spec = None
-    else:
-        # ensure the selected mode is valid
-        if ((out is None and not to32) or (out is not None and out.dtype.kind != 'f')) and dead_pix_mode is True:
-            raise Exception('Cannot write NaN values to int array; dead_pix_mode cannot be True')
+        if not quiet and odd_row_offset != 0:
+            logger.info(f'Correcting line phase offset of {odd_row_offset}')
         
-        if dead_pix_mode == 'min':
-            # iterate over chunks to find min, note we actually call nanmax b/c values are inverted
-            max_val = np.uint16(0)
-            for chunk_slice in chunks:
-                max_val = max(max_val, np.nanmax(sbx_mmap[subind_seqs[0][chunk_slice]]))
-            dead_pix_mode = np.invert(max_val)
+        if chunk_size is None:
+            # load a contiguous block all at once
+            chunk_size = n_frames_out
+        chunks = [slice(start, min(start + chunk_size, n_frames_out)) for start in range(0, n_frames_out, chunk_size)]
 
-        # load even and odd rows separately to implement shift and correct dead pixels
-        inds_sets, interp_spec = _make_inds_sets_with_corrections(n_y, n_x, subind_seqs, save_shape,
-                                                                  odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
-
-    if out is None:
-        out_arr = np.empty(save_shape, dtype=(np.float32 if to32 else np.uint16))
-    else:
-        out_arr = out
-    del out  # ensure out_arr replaces out from here
-
-    # prepare for parallel processing
-    if dview is not None and len(chunks) > 1:
-        if 'multiprocessing'in str(type(dview)):
-            map_fn = dview.imap
+        # create indices for loading data
+        if odd_row_ndead == 0 and odd_row_offset == 0:
+            # this list specifies how to index the input and output arrays when copying data.
+            # format of each entry: (<tuple of spatial out-indices>, <tuple of spatial in-indices>)
+            # or: (<tuple of spatial out-indices>, constant)
+            # each entry is applied in order.
+            inds_sets = [((), np.ix_(*subind_seqs[1:]))]
+            interp_spec = None
         else:
-            map_fn = dview.map_async
-        inplace = False
-    else:
-        map_fn = map
-        inplace = True
+            # ensure the selected mode is valid
+            if ((out is None and not to32) or (out is not None and out.dtype.kind != 'f')) and dead_pix_mode is True:
+                raise Exception('Cannot write NaN values to int array; dead_pix_mode cannot be True')
+            
+            if dead_pix_mode == 'min':
+                # iterate over chunks to find min, note we actually call nanmax b/c values are inverted
+                max_val = np.uint16(0)
+                for chunk_slice in chunks:
+                    max_val = max(max_val, np.nanmax(sbx_mmap[subind_seqs[0][chunk_slice]]))
+                dead_pix_mode = np.invert(max_val)
 
-    args = (
-        [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out_arr.dtype,
-         out_arr[chunk_slice] if inplace else None]
-        for chunk_slice in chunks
-    )
+            # load even and odd rows separately to implement shift and correct dead pixels
+            inds_sets, interp_spec = _make_inds_sets_with_corrections(
+                n_y, n_x, subind_seqs, save_shape, odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
-    if not quiet:
-        if len(chunks) > 1:
-            chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
+        if out is None:
+            out_dtype = np.float32 if to32 else np.uint16
+            if save_memory:            
+                # create temp memmap to store partial result out of memory
+                outfile = tempfile.NamedTemporaryFile(dir=get_tempdir())
+                out_arr = np.memmap(outfile.name, dtype=out_dtype, shape=save_shape)
+            else:
+                out_arr = np.empty(save_shape, dtype=out_dtype)
         else:
-            logger.info('Converting movie...')
+            out_arr = out
+            out_dtype = out.dtype
 
-    for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
-        if not inplace:
-            out_arr[chunk_slice] = chunk
-    if isinstance(chunks, tqdm):
-        chunks.close()
+        # prepare for parallel processing
+        if dview is not None:
+            if 'multiprocessing'in str(type(dview)):
+                map_fn = dview.imap
+            else:
+                map_fn = dview.map_async
+            inplace = False
+        else:
+            map_fn = map
+            inplace = True
 
-    if interp and interp_spec is not None:
-        _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode, quiet=quiet)
+        args = (
+            [inds_sets, sbx_mmap[subind_seqs[0][chunk_slice]], save_shape[1:], out_dtype,
+            out_arr[chunk_slice] if inplace else None]
+            for chunk_slice in chunks
+        )
 
-    del sbx_mmap  # Important to close file (on Windows)
+        if not quiet:
+            if len(chunks) == 1:
+                logger.info('Converting movie...')
+            else:
+                chunks = tqdm(chunks, desc='Converting movie in chunks...', unit='chunk')
 
-    if isinstance(out_arr, np.memmap):
-        out_arr.flush()    
+        for chunk, chunk_slice in zip(map_fn(_load_movie_chunk, args), chunks):
+            if not inplace:
+                out_arr[chunk_slice] = chunk
+
+        if isinstance(chunks, tqdm):
+            chunks.close()
+
+        if interp and interp_spec is not None:
+            _interp_offset_pixels(sbx_mmap, np.array(subind_seqs[0]), out_arr, interp_spec, dead_pix_mode, quiet=quiet)
+
+        if isinstance(out_arr, np.memmap):
+            if out is None:
+                # load the memmap into memory
+                out_arr = np.array(out_arr)
+            else:
+                # just flush before returning
+                out_arr.flush()
+
+    finally:
+        del sbx_mmap  # Important to close file (on Windows)
+
+        if outfile is not None:
+            del outfile  # remove temporary file
+
     return out_arr
 
 
 def _sbxread_worker(args, dview=None) -> np.ndarray:
     """For calling _sbxread_helper in parallel"""
-    out_mmap_args, file_in, subindices, channel, plane, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode = args
+    out_mmap_args, file_in, subindices, channel, plane, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory = args
     if out_mmap_args is not None:
         out = np.memmap(**out_mmap_args)
     else:
         out = None
     res = _sbxread_helper(filename=file_in, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
-                          dview=dview, quiet=True) 
+                          save_memory=save_memory, dview=dview, quiet=True) 
     if out is not None:
         # inplace, clean up memmap
         out.flush()
@@ -777,7 +805,6 @@ def _load_movie_chunk(args):
 
             # Note: important to copy the data here instead of making a view,
             # so the memmap can be closed (achieved by advanced indexing)
-            #chunk = in_mmap[(time_axis_expanded,) + tuple(np.expand_dims(i, 0) for i in in_inds)]
             chunk = in_arr[(slice(None),) + in_inds]
             # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
             np.invert(chunk, out=chunk)  # avoid copying, may be large
