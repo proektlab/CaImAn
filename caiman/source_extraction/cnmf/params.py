@@ -118,6 +118,7 @@ class GroupParams(Mapping):
     __pydantic_fields__: ClassVar[Mapping[str, FieldInfo]]  # automatic, just declaring for typing purposes
 
     group_name: ClassVar[str]  # name of the attribute on CNMFParams
+    removed_params: ClassVar[list[str]] = []  # to log a different message for params that have been removed rather than missing
 
     # back-reference to help with some computed fields
     _full_params: 'SkipJsonSchema[Optional[CNMFParams]]' = Field(default=None, init=False, exclude=True, repr=False)
@@ -165,6 +166,8 @@ class GroupParams(Mapping):
                 if argname in cls.params():
                     logger.warning(f'The parameter {cls.group_name}/{argname} was ignored because it is '
                                    'computed from other parameters and cannot be set directly. ')
+                elif argname in cls.removed_params:
+                    logger.warning(f'The parameter {cls.group_name}/{argname} has been removed; setting it has no effect.')
                 elif warn_unused:
                     logger.warning(
                         f'When creating {cls.group_name} params, provided key {argname} was not consumed. '
@@ -333,6 +336,7 @@ class DataParams(GroupParams):
 class PatchParams(GroupParams):
     """Parameters for how the data is divided into patches"""
     group_name = 'patch'
+    removed_params = ['p_ssub', 'p_tsub']
 
     border_pix: int = 0
     del_duplicates: bool = False
@@ -647,6 +651,7 @@ class OnlineParams(GroupParams):
 class MotionParams(GroupParams):
     """Params that control motion correction"""
     group_name = 'motion'
+    removed_params = ['num_splits_to_process_els', 'num_splits_to_process_rig']
 
     # flag for allowing NaN in the boundaries
     #  - True: keep nans
@@ -1350,6 +1355,7 @@ class CNMFParams:
         'only_init_patch': 'only_init',
         'k': 'K',
         'gnb': 'nb',
+        'merge_thresh': 'merge_thr'
     }
 
     # mapping of nested param names to the group the parameter should be set on
@@ -1467,16 +1473,7 @@ class CNMFParams:
                 logger.warning("using CNMF-E's ringmodel for background hence setting key " +
                                "normalize_init in group init automatically to False.")
                 self.set('init', {'normalize_init': False}, warn=False, verbose=False)
-            
-            # Set structuring element to the no-op value (previously done in initialization.greedyROI_corr)
-            ndim = len(self.data.dims) if self.data.dims is not None else 2
-            null_se = np.ones((1,) * ndim, dtype=np.uint8)
-            if not utilities.all_same(self.spatial.se, null_se):
-                logger.warning("using CNMF-E's ringmodel for background hence setting key "
-                               "se in group spatial automatically to null element.")
-                self.set('spatial', {'se': null_se}, warn=False, verbose=False)
-       
-        # -- end init params --
+
 
         if self.init.nb <= 0 and (self.patch.nb_patch != self.init.nb or self.patch.low_rank_background is not None):
             logger.warning(f"nb={self.init.nb}, hence setting keys nb_patch and low_rank_background in group patch automatically.")
