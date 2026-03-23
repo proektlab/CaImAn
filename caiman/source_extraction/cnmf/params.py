@@ -67,11 +67,19 @@ NDArray = Annotated[
 ]
 
 
+# deal with slices, potentially other objects that are saved as bytes (note should only be used on trusted data!)
+def eval_bytes(obj: Any) -> Any:
+    if isinstance(obj, bytes):
+        return eval(obj.decode('utf-8'))
+    return obj
+
+
 Slice = Annotated[
     Union[  # these are the same base types (slice) but with different validators
         InstanceOf[slice],  # accept existing slices as is
         # anything convertible to a len-3 tuple, with 'NoneType' conversion, can be a slice
         Annotated[slice, ValidateAs(tuple[SafeAny, SafeAny, SafeAny], lambda tup: slice(*tup))]],
+    BeforeValidator(eval_bytes),
     PlainSerializer(lambda sl: (sl.start, sl.stop, sl.step)),
     WithJsonSchema(TypeAdapter(tuple[Any, Any, Any]).json_schema())
 ]
@@ -549,7 +557,7 @@ class QualityParams(GroupParams):
 
     SNR_lowest: float = 0.5         # minimum accepted SNR value
     cnn_lowest: float = 0.1         # minimum accepted value for CNN classifier
-    gSig_range: SafeOptional[list[int]] = None  # range for gSig scale for CNN classifier
+    gSig_range: SafeOptional[list[list[int]]] = None  # range for gSig scale for CNN classifier
     min_SNR: float = 2.5            # transient SNR threshold
     min_cnn_thr: float = 0.9        # threshold for CNN classifier
     rval_lowest: float = -1.        # minimum accepted space correlation
@@ -1088,8 +1096,8 @@ class CNMFParams:
             cnn_lowest: float, default: 0.1
                 minimum required CNN threshold. Components with score lower than this will get rejected.
 
-            gSig_range: list or integers, default: None
-                gSig scale values for CNN classifier. In not None, multiple values are tested in the CNN classifier.
+            gSig_range: list of [int, int] or None, default: None
+                gSig scale values for CNN classifier. If not None, multiple values are tested in the CNN classifier.
 
             min_SNR: float, default: 2.5
                 trace SNR threshold. Traces with SNR above this will get accepted
@@ -1399,6 +1407,15 @@ class CNMFParams:
                 'Each field should be a GroupParams subclass'
             groups[info.name] = info.type
         return groups
+    
+
+    def __setstate__(self, state: dict[str, Any]):
+        """Ensure fields are objects of the proper type (i.e. when unpickling old-version CNMFParams)"""
+        for group, GroupClass in self.get_group_types().items():
+            if isinstance(group_obj := state.get(group), dict):
+                state[group] = GroupClass(**group_obj)
+        
+        self.__dict__.update(state)
     
 
     @model_validator(mode='before')
@@ -1717,8 +1734,8 @@ class CNMFParams:
                     paramkey = cls.flat_param_renames[paramkey]
 
                 found = False
-                for group, group_class in groups.items():
-                    if paramkey in group_class.input_params(): # Is it known?
+                for group, GroupClass in groups.items():
+                    if paramkey in GroupClass.input_params(): # Is it known?
                         found = True
                         if group not in nested_params:
                             nested_params[group] = {paramkey: paramval}
