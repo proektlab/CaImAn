@@ -817,10 +817,13 @@ def _load_movie_chunk(args):
             # so the memmap can be closed (achieved by advanced indexing)
             # 2/22/26 updated so in_arr can actually be a memmap again
 
-            # expand for broadcasting
-            time_inds_expanded = np.asarray(in_time_inds)[
-                (slice(None),) + (np.newaxis,) * len(in_inds)]
-            chunk = in_arr[(time_inds_expanded,) + in_inds]
+            if isinstance(in_time_inds, slice):
+                chunk = in_arr[(in_time_inds,) + in_inds]
+            else:
+                # expand for broadcasting
+                time_inds_expanded = np.asarray(in_time_inds)[
+                    (slice(None),) + (np.newaxis,) * len(in_inds)]
+                chunk = in_arr[(time_inds_expanded,) + in_inds]
 
             # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
             np.invert(chunk, out=chunk)  # avoid copying, may be large
