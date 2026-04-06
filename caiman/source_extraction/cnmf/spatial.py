@@ -23,7 +23,7 @@ from sklearn.pipeline import make_pipeline
 import tempfile
 import time
 from typing import Union, Optional, Sequence
-from tqdm import trange
+from tqdm import trange, tqdm
 
 import caiman.mmapping
 import caiman.utils.stats
@@ -942,15 +942,18 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
     n_no_improve = 0
     batch_slices = [slice(offset, offset + nmf_params['batch_size'])
                     for offset in range(0, Y.shape[0], nmf_params['batch_size'])]
-    for k_epoch in trange(nmf_params['max_iter'], unit='batch'):
+
+    for k_epoch in trange(nmf_params['max_iter'], unit='MiniBatchNMF epoch'):
         sqerr_accum = 0
-        for batch_slice in rng.permuted(batch_slices):
+        for batch_ind in tqdm(rng.permutation(len(batch_slices)), unit='batch'):
+            batch_slice = batch_slices[batch_ind]
             Y_batch = Y[batch_slice, :][not_px[batch_slice]]
             X = np.maximum(Y_batch, np.float64(0))
             nmf.partial_fit(X)
             W_batch = nmf.transform(X)
             sqerr_accum += np.sum((X - W_batch @ nmf.components_) ** 2)
         err = np.sqrt(sqerr_accum)
+
         # check for early stopping due to no improvement
         if err >= last_err:
             # revert to before this batch
@@ -970,8 +973,7 @@ def estimate_bg_batched_nmf(Y, not_px, nb, batch_size: int) -> np.ndarray:
                     break
         last_comps = nmf.components_
         last_params = nmf.get_params()
-    else:
-        logger.warning('NMF did not converge')
+
     return nmf.components_
 
 def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, dist, expandCore, dview):
@@ -1041,7 +1043,7 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
             px = (np.sum(dist_indicator, axis=1) > 0)
             not_px = ~px
 
-            n_bytes = np.sum(not_px) * Y.shape[1] * 4
+            n_bytes = np.sum(not_px) * Y.shape[1] * 8
             n_bytes_avail = psutil.virtual_memory().available / 4
             in_memory = n_bytes < n_bytes_avail
 
@@ -1053,7 +1055,7 @@ def computing_indicator(Y, A_in, b, C, f, nb, method, dims, min_size, max_size, 
                     # fit NMF in chunks, have to implement manually because we don't want to load
                     # all of Y[not_pix, :] to feed it 
                     logger.info('estimating f using minibatch NMF')
-                    batch_size = int(n_bytes_avail / (Y.shape[1] * 4))
+                    batch_size = int(n_bytes_avail / (Y.shape[1] * 8))
                     f = estimate_bg_batched_nmf(Y, not_px, nb, batch_size=batch_size)
             else:
                 if in_memory:
