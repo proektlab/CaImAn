@@ -8,6 +8,7 @@ version = "0.4.*"
 
 [package.build.config]
 ignore-pypi-mapping = false
+extra-args = ["-Ceditable_mode=compat"]
 
 [package.host-dependencies]
 uv = "*"  # added for faster installation
