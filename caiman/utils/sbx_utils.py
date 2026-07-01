@@ -6,6 +6,7 @@ Utility functions for Neurolabware Scanbox files (.sbx)
 import datetime
 import logging
 import numpy as np
+from numpy.typing import DTypeLike
 from numpy import fft
 import os
 import scipy
@@ -75,7 +76,7 @@ def _todict(matobj) -> dict:
 
 
 def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), channel: Optional[int] = None,
-            plane: Optional[int] = None, to32: Optional[bool] = None, odd_row_ndead: Optional[int] = None,
+            plane: Optional[int] = None, dtype: Optional[DTypeLike] = None, odd_row_ndead: Optional[int] = None,
             odd_row_offset: Optional[int] = 0, force_estim_ndead_offset: bool = False, interp: bool = True,
             dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None, quiet=False) -> np.ndarray:
     """
@@ -96,9 +97,9 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
             set to an int to load only the given plane (converts from 3D to 2D data)
             in the case that len(subindices) == 4, subindices are applied first, then the plane is selected.
         
-        to32: bool | None
-            whether to read in float32 format (default is to keep as uint16)
-            if to32 is None, will be set to True only if necessary to contain nans according to other settings.
+        dtype: DTypeLike | None
+            type to convert output to. values will be scaled if necessary to avoid overflows.
+            if None, defaults to float32 if necessary to contain nans according to other settings, else uint16.
 
         force_estim_ndead_offset: bool
             when this flag is false (default) and None is passed to odd_row_ndead and/or odd_row_offset, the corrections are
@@ -124,16 +125,16 @@ def sbxread(filename: str, subindices: Optional[FileSubindices] = slice(None), c
             if odd_row_offset is None:
                 odd_row_offset = 0
     
-    if to32 is None:
-        to32 = (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode is True
+    if dtype is None:
+        dtype = np.float32 if (odd_row_ndead != 0 or odd_row_offset != 0) and dead_pix_mode is True else np.uint16
 
-    return _sbxread_helper(filename, subindices=subindices, channel=channel, plane=plane, chunk_size=None, to32=to32,
+    return _sbxread_helper(filename, subindices=subindices, channel=channel, plane=plane, chunk_size=None, out_dtype=dtype,
                            odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
                            save_memory=save_memory, dview=dview, quiet=quiet)
 
 
 def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optional[FileSubindices] = slice(None),
-               bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
+               bigtiff: Optional[bool] = True, imagej: bool = False, dtype: Optional[DTypeLike] = None,
                channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
                odd_row_ndead: Optional[int] = None, odd_row_offset: Optional[int] = 0, force_estim_ndead_offset: bool = False,
                interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', dview=None) -> None:
@@ -151,9 +152,9 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
             which frames to read (defaults to all)
             if a tuple of non-scalars, specifies slices of up to 4 dimensions in the order (frame, Y, X, Z).
 
-        to32: bool | None
-            whether to save in float32 format (default is to keep as uint16)
-            if to32 is None, will be set to True only if necessary to contain nans according to other settings.
+        dtype: DTypeLike | None
+            type to save output as. values will be scaled if necessary to avoid overflows.
+            if None, defaults to float32 if necessary to contain nans according to other settings, else uint16.
 
         channel: int | None
             which channel to save (required if data has >1 channel)
@@ -182,7 +183,7 @@ def sbx_to_tif(filename: str, fileout: Optional[str] = None, subindices: Optiona
     if subindices is None:
         subindices = slice(None)
 
-    sbx_chain_to_tif([filename], fileout, [subindices], bigtiff=bigtiff, imagej=imagej, to32=to32,
+    sbx_chain_to_tif([filename], fileout, [subindices], bigtiff=bigtiff, imagej=imagej, dtype=dtype,
                      channel=channel, plane=plane, chunk_size=chunk_size, force_estim_ndead_offset=force_estim_ndead_offset,
                      odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp,
                      dead_pix_mode=dead_pix_mode, dview=dview)
@@ -208,7 +209,7 @@ def broadcast_chain_subindices(maybe_subindices: Optional[ChainSubindices], n_fi
 
 
 def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[ChainSubindices] = slice(None),
-                     bigtiff: Optional[bool] = True, imagej: bool = False, to32: Optional[bool] = None,
+                     bigtiff: Optional[bool] = True, imagej: bool = False, dtype: Optional[DTypeLike] = None,
                      channel: Optional[int] = None, plane: Optional[int] = None, chunk_size: Optional[int] = 100,
                      odd_row_ndead: Union[Optional[int], Sequence[Optional[int]]] = None, odd_row_offset: Union[Optional[int], Sequence[Optional[int]]] = 0,
                      force_estim_ndead_offset: bool = False, interp: bool = True, dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None
@@ -229,7 +230,7 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
 
         odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory: see _sbxread_helper.
 
-        to32, channel, plane, chunk_size, force_estim_ndead_offset: see sbx_to_tif
+        dtype, channel, plane, chunk_size, force_estim_ndead_offset: see sbx_to_tif
     Returns:
         all_n_frames_out: list[int]
             number of frames from each file saved to the output
@@ -264,9 +265,9 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
     might_do_correction = (
         any(ndead != 0 for ndead in odd_row_ndead) or
         any(offset != 0 for offset in odd_row_offset))
-    if to32 is None:
+    if dtype is None:
         # if we will be adding nans to the final image, must convert to float32
-        to32 = dead_pix_mode is True and might_do_correction
+        dtype = np.float32 if dead_pix_mode is True and might_do_correction else np.int16
 
     # Get the total size of the file
     all_shapes = [sbx_shape(file) for file in filenames]
@@ -302,12 +303,11 @@ def sbx_chain_to_tif(filenames: list[str], fileout: str, subindices: Optional[Ch
         fileout = fileout + '.tif'
 
     # Make the output file and prepare for parallel processing
-    dtype = np.dtype(np.float32 if to32 else np.uint16)
     frame_slices, out_memmap_args = _prepare_concat_output_memmap(fileout, save_shape, all_n_frames_out, dtype=dtype,
                                                                   bigtiff=bigtiff, imagej=imagej)
 
     args = ((
-        out_args, filename, subind, channel, plane, False, chunk_size, this_ndead,
+        out_args, filename, subind, channel, plane, dtype, chunk_size, this_ndead,
         this_offset, interp, dead_pix_mode, save_memory)
             for out_args, filename, subind, this_ndead, this_offset in
             zip(out_memmap_args, filenames, subindices, odd_row_ndead, odd_row_offset, strict=True))
@@ -508,7 +508,7 @@ def get_odd_row_ndead(filename: str) -> int:
     return odd_row_ndead
 
 
-def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], frames_per_section: list[int], dtype,
+def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], frames_per_section: list[int], dtype: DTypeLike,
                                   bigtiff: Optional[bool] = True, imagej=False) -> tuple[list[slice], list[dict]]:
     """
     Write an empty output tif file with the given full_shape. frames_per_section specifies how many frames are from each subsection
@@ -520,6 +520,8 @@ def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], fr
     """
     if sum(frames_per_section) != full_shape[0]:
         raise ValueError('Frames per section is not a valid division of the total frames')
+
+    dtype = np.dtype(dtype)
 
     # write the file
     res = tifffile.imwrite(filename, data=None, shape=full_shape, returnoffset=True, bigtiff=bigtiff, imagej=imagej,
@@ -547,7 +549,7 @@ def _prepare_concat_output_memmap(filename: str, full_shape: tuple[int, ...], fr
 
 
 def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), channel: Optional[int] = None,
-                    plane: Optional[int] = None, out: Optional[np.memmap] = None, to32: bool = False, chunk_size: Optional[int] = 100,
+                    plane: Optional[int] = None, out: Optional[np.memmap] = None, out_dtype: DTypeLike = 'int16', chunk_size: Optional[int] = 100,
                     odd_row_ndead: Optional[int] = 0, odd_row_offset: Optional[int] = 0, interp=True,
                     dead_pix_mode: Union[str, bool] = 'copy', save_memory=False, dview=None, quiet=False) -> np.ndarray:
     """
@@ -566,8 +568,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         out: np.memmap | None
             existing memory-mapped file to write into
         
-        to32: bool
-            whether to convert to float32 if creating a new array. ignored if writing into an existing array.
+        out_dtype: DTypeLike
+            dtype of output - ignored if writing into an existing array.
 
         plane: int | None
             set to an int to load only the given plane (converts from 3D to 2D data)
@@ -594,7 +596,7 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
         dead_pix_mode: str | bool
             how to replace dead pixels identified by odd_row_nsaturated and odd_row_offset. Same options as params.motion['border_nan'],
-            and True (NaN) is invalid if 'to32' is False. if interp is True, this only sets the extrapolation mode.
+            and True (NaN) is invalid if out_dtype is an integer type. if interp is True, this only sets the extrapolation mode.
         
         save_memory: bool
             avoid allocating more memory than needed to fit the data, even when it might be more time-inefficient
@@ -690,6 +692,11 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
         chunks = [slice(start, min(start + chunk_size, n_frames_out)) for start in range(0, n_frames_out, chunk_size)]
 
         # create indices for loading data
+        if out is None:
+            out_dtype = np.dtype(out_dtype)
+        else:
+            out_dtype = out.dtype
+
         if odd_row_ndead == 0 and odd_row_offset == 0:
             # this list specifies how to index the input and output arrays when copying data.
             # format of each entry: (<tuple of spatial out-indices>, <tuple of spatial in-indices>)
@@ -699,7 +706,8 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
             interp_spec = None
         else:
             # ensure the selected mode is valid
-            if ((out is None and not to32) or (out is not None and out.dtype.kind != 'f')) and dead_pix_mode is True:
+
+            if out_dtype.kind != 'f' and dead_pix_mode is True:
                 raise Exception('Cannot write NaN values to int array; dead_pix_mode cannot be True')
             
             if dead_pix_mode == 'min':
@@ -714,7 +722,6 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                 n_y, n_x, subind_seqs, save_shape, odd_row_ndead, odd_row_offset, dead_pix_mode, interp)
 
         if out is None:
-            out_dtype = np.float32 if to32 else np.uint16
             if save_memory:            
                 # create temp memmap to store partial result out of memory
                 outfile = tempfile.NamedTemporaryFile(dir=get_tempdir())
@@ -723,7 +730,6 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
                 out_arr = np.empty(save_shape, dtype=out_dtype)
         else:
             out_arr = out
-            out_dtype = out.dtype
 
         # prepare for parallel processing
         if dview is not None:
@@ -790,12 +796,12 @@ def _sbxread_helper(filename: str, subindices: FileSubindices = slice(None), cha
 
 def _sbxread_worker(args, dview=None) -> np.ndarray:
     """For calling _sbxread_helper in parallel"""
-    out_mmap_args, file_in, subindices, channel, plane, to32, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory = args
+    out_mmap_args, file_in, subindices, channel, plane, out_dtype, chunk_size, odd_row_ndead, odd_row_offset, interp, dead_pix_mode, save_memory = args
     if out_mmap_args is not None:
         out = np.memmap(**out_mmap_args)
     else:
         out = None
-    res = _sbxread_helper(filename=file_in, subindices=subindices, channel=channel, plane=plane, out=out, to32=to32, chunk_size=chunk_size,
+    res = _sbxread_helper(filename=file_in, subindices=subindices, channel=channel, plane=plane, out=out, out_dtype=out_dtype, chunk_size=chunk_size,
                           odd_row_ndead=odd_row_ndead, odd_row_offset=odd_row_offset, interp=interp, dead_pix_mode=dead_pix_mode,
                           save_memory=save_memory, dview=dview, quiet=True) 
     if out is not None:
@@ -805,8 +811,24 @@ def _sbxread_worker(args, dview=None) -> np.ndarray:
     return res
 
 
+def _get_int_conversion_factor(out_type: DTypeLike) -> int:
+    """Get factor to divide by to avoid overflow if converting to an int type (input is always np.uint16)"""
+    out_dtype = np.dtype(out_type)
+    in_bytes = 2  # uint16
+
+    if out_dtype.kind == 'u':
+        return max(1, in_bytes // out_dtype.itemsize)
+    elif out_dtype.kind == 'i':
+        # input is unsigned, so itemsize is effectively half to avoid overflow
+        return max(1, 2 * in_bytes // out_dtype.itemsize)
+    else:
+        return 1
+    
+
 def _load_movie_chunk(args):
     inds_sets, in_time_inds, in_arr, out_shape, out_dtype, out = args
+    anti_overflow_factor = _get_int_conversion_factor(out_dtype)
+
     if out is None:
         out = np.empty((in_arr.shape[0],) + out_shape, dtype=out_dtype)
     for out_inds, in_inds in inds_sets:
@@ -827,7 +849,8 @@ def _load_movie_chunk(args):
 
             # Note: SBX files store the values strangely, it's necessary to invert each uint16 value to get the correct ones
             np.invert(chunk, out=chunk)  # avoid copying, may be large
-        out[(slice(None),) + out_inds] = chunk
+
+        out[(slice(None),) + out_inds] = chunk if anti_overflow_factor == 1 else chunk / anti_overflow_factor  # type: ignore
     return out
 
 
