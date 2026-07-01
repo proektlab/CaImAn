@@ -59,7 +59,7 @@ class timeseries(np.ndarray):
         if fr is None:
             raise Exception('You need to specify the frame rate')
 
-        obj = np.asarray(input_arr).view(cls)
+        obj = np.asanyarray(input_arr).view(cls)
         # add the new attribute to the created instance
 
         obj.start_time = np.double(start_time)

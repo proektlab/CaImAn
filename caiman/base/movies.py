@@ -1283,7 +1283,7 @@ def load(file_name: Union[str, list[str]],
         logger.error(f"File request:[{file_name}] not found!")
         raise Exception(f'File {file_name} not found!')
 
-    return movie(input_arr.astype(outtype),
+    return movie(input_arr.astype(outtype, copy=False),
                  fr=fr,
                  start_time=start_time,
                  file_name=os.path.split(file_name)[-1],
