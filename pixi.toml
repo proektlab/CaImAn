@@ -12,6 +12,7 @@ extra-args = ["-Ceditable_mode=compat"]
 
 [package.host-dependencies]
 uv = "*"  # added for faster installation
+python = "*"  # allow build variants
 
 # Environment specification for using just caiman
 [workspace]
