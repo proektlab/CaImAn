@@ -6,7 +6,6 @@ from setuptools import setup, find_packages
 import sys
 from Cython.Build import cythonize
 from setuptools.extension import Extension
-from distutils.command.build_ext import build_ext
 
 """
     Installation script for anaconda installers
@@ -93,5 +92,4 @@ setup(
     data_files=data_files,
     install_requires=[''],
     ext_modules=cythonize(ext_modules, language_level="3"),
-    cmdclass={'build_ext': build_ext}
 )
